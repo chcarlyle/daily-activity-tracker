@@ -179,7 +179,7 @@
           "unit": "times"
         },
         {
-          "name": "96oz Water",
+          "name": "64oz Water",
           "category": "Physical",
           "points": 10,
           "trackable": false
@@ -195,12 +195,6 @@
           "category": "Intellectual",
           "points": 15,
           "trackable": false
-        },
-        {
-          "name": "TD Info Session",
-          "category": "Intellectual",
-          "points": 20,
-          "trackable": false
         }
       ],
       "completed": [
@@ -209,9 +203,14 @@
         "Shower",
         "Brush Teeth",
         "Shave",
-        "Revise Tracker Templates"
+        "Revise Tracker Templates",
+        "18+ Content",
+        "Phone Screen Time",
+        "64oz Water"
       ],
-      "quantities": {}
+      "quantities": {"18+ Content": 1,
+                      "Brush Teeth": 2,
+                      "Phone Screen Time": 11}
     }
   },
   "day_types": {
