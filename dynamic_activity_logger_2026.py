@@ -4,6 +4,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import json
 from pathlib import Path
 from scipy import stats
@@ -376,7 +377,7 @@ st.title("📖 Dynamic Daily Activity Logger")
 st.markdown("*Flexible day-by-day tracking with custom checklists*")
 
 # Today's setup
-today = datetime.now().date()
+today = datetime.now(ZoneInfo("America/New_York")).date()
 today_str = today.strftime("%Y-%m-%d")
 
 # Initialize today's data
