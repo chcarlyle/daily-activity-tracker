@@ -12,7 +12,7 @@ st.set_page_config(
     page_title="Daily Activity Tracker",
     page_icon="⭐",
     layout="wide",
-    initial_sidebar_state="collapsed",  # Hide sidebar on mobile by default
+    initial_sidebar_state="expanded",  # Show sidebar by default
     menu_items={
         'Get Help': None,
         'Report a bug': None,
