@@ -544,7 +544,6 @@ with col3:
     selected_date = st.date_input(
         "Select Date",
         value=st.session_state.selected_date,
-        max_value=today_actual,
         key="date_picker"
     )
     if selected_date != st.session_state.selected_date:
@@ -554,9 +553,8 @@ with col3:
 with col4:
     if st.button("▶️ Next"):
         next_date = st.session_state.selected_date + timedelta(days=1)
-        if next_date <= today_actual:
-            st.session_state.selected_date = next_date
-            st.rerun()
+        st.session_state.selected_date = next_date
+        st.rerun()
 
 with col5:
     if st.button("📍 Today"):
@@ -572,7 +570,8 @@ if today < today_actual:
     days_ago = (today_actual - today).days
     st.info(f"📆 Viewing {days_ago} day{'s' if days_ago > 1 else ''} ago")
 elif today > today_actual:
-    st.warning("⚠️ You're viewing a future date!")
+    days_ahead = (today - today_actual).days
+    st.info(f"📅 Planning ahead: {days_ahead} day{'s' if days_ahead > 1 else ''} from now")
 
 # Initialize today's data
 if today_str not in data["daily_checklists"]:
