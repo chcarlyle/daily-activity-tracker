@@ -1,6 +1,35 @@
 # LifeTracker Improvements
 
-## Latest Changes (v2.0)
+## Latest Changes (v3.0)
+
+### Productivity & Habit Building Features
+- **Removed notes field** - Cleaned up unused daily_metrics notes structure
+- **Added Streaks & Habits tab** with:
+  - Current and longest streak tracking for every task
+  - Overall positive day streak counter
+  - 30-day win rate percentage
+  - Task-level consistency scores (completion percentage)
+  - Habit strength indicators and insights
+  - Smart recommendations for habit building
+  - Automatic classification of habits (Established, Building, Needs Attention)
+- **Added Goals & Review tab** with:
+  - Weekly, monthly, and yearly goal setting
+  - Point-based goal tracking with visual progress bars
+  - Real-time progress calculation
+  - Goal completion status indicators
+  - Easy goal creation and deletion
+  - Weekly review dashboard with:
+    - Week summary statistics
+    - Reflection prompts for continuous improvement
+    - Guided questions for planning ahead
+
+### Key Functions Added
+- `get_task_streak()` - Calculate current and longest streaks for any task
+- `get_positive_day_streak()` - Track consecutive positive net point days
+- `get_task_consistency()` - Calculate completion percentage over time periods
+- `get_all_unique_tasks()` - Get list of all tasks from recent history
+
+## Previous Updates (v2.0)
 
 ### Simplification & Enhanced Analytics
 - **Removed day types system** - No more complex point multipliers or negative tolerance calculations

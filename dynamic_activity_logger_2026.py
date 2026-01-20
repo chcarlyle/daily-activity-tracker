@@ -339,11 +339,11 @@ def get_category_points(date_str, category):
     """Get points for a specific category on a date"""
     if date_str not in data["daily_checklists"]:
         return 0
-    
+
     completed = data["daily_checklists"][date_str].get("completed", [])
     tasks = data["daily_checklists"][date_str].get("tasks", [])
     quantities = data["daily_checklists"][date_str].get("quantities", {})
-    
+
     total = 0
     for task in tasks:
         if task["name"] in completed and task["category"] == category:
@@ -352,8 +352,116 @@ def get_category_points(date_str, category):
                 quantity = quantities.get(task["name"], 1)
                 points = points * quantity
             total += points
-    
+
     return total
+
+def get_task_streak(task_name, end_date, days_back=90):
+    """Calculate current streak and longest streak for a specific task"""
+    current_streak = 0
+    longest_streak = 0
+    temp_streak = 0
+
+    for i in range(days_back):
+        check_date = end_date - timedelta(days=i)
+        date_str = check_date.strftime("%Y-%m-%d")
+
+        if date_str in data["daily_checklists"]:
+            completed = data["daily_checklists"][date_str].get("completed", [])
+            tasks = data["daily_checklists"][date_str].get("tasks", [])
+
+            # Check if task exists for this day and was completed
+            task_exists = any(t["name"] == task_name for t in tasks)
+            task_completed = task_name in completed
+
+            if task_exists:
+                if task_completed:
+                    temp_streak += 1
+                    if i < days_back:  # Only count towards current streak if recent
+                        if temp_streak > current_streak and i == current_streak:
+                            current_streak = temp_streak
+                    if temp_streak > longest_streak:
+                        longest_streak = temp_streak
+                else:
+                    temp_streak = 0
+
+    # Recalculate current streak properly
+    current_streak = 0
+    for i in range(days_back):
+        check_date = end_date - timedelta(days=i)
+        date_str = check_date.strftime("%Y-%m-%d")
+
+        if date_str in data["daily_checklists"]:
+            completed = data["daily_checklists"][date_str].get("completed", [])
+            tasks = data["daily_checklists"][date_str].get("tasks", [])
+
+            task_exists = any(t["name"] == task_name for t in tasks)
+            task_completed = task_name in completed
+
+            if task_exists and task_completed:
+                current_streak += 1
+            elif task_exists:
+                break
+
+    return current_streak, longest_streak
+
+def get_positive_day_streak(end_date, days_back=90):
+    """Calculate current streak of positive net point days"""
+    current_streak = 0
+
+    for i in range(days_back):
+        check_date = end_date - timedelta(days=i)
+        date_str = check_date.strftime("%Y-%m-%d")
+
+        net_points = get_day_points(date_str)
+
+        if net_points > 0:
+            current_streak += 1
+        elif date_str in data["daily_checklists"] and data["daily_checklists"][date_str].get("tasks"):
+            # Day exists with tasks but wasn't positive
+            break
+
+    return current_streak
+
+def get_task_consistency(task_name, end_date, days_back=30):
+    """Calculate consistency percentage for a task over a period"""
+    days_with_task = 0
+    days_completed = 0
+
+    for i in range(days_back):
+        check_date = end_date - timedelta(days=i)
+        date_str = check_date.strftime("%Y-%m-%d")
+
+        if date_str in data["daily_checklists"]:
+            tasks = data["daily_checklists"][date_str].get("tasks", [])
+            completed = data["daily_checklists"][date_str].get("completed", [])
+
+            task_exists = any(t["name"] == task_name for t in tasks)
+
+            if task_exists:
+                days_with_task += 1
+                if task_name in completed:
+                    days_completed += 1
+
+    if days_with_task == 0:
+        return 0
+
+    return (days_completed / days_with_task) * 100
+
+def get_all_unique_tasks(days_back=30):
+    """Get all unique tasks from recent history"""
+    unique_tasks = set()
+    end_date = datetime.now(ZoneInfo("America/New_York")).date()
+
+    for i in range(days_back):
+        check_date = end_date - timedelta(days=i)
+        date_str = check_date.strftime("%Y-%m-%d")
+
+        if date_str in data["daily_checklists"]:
+            tasks = data["daily_checklists"][date_str].get("tasks", [])
+            for task in tasks:
+                unique_tasks.add(task["name"])
+
+    return sorted(list(unique_tasks))
 
 # Sidebar
 with st.sidebar:
@@ -522,7 +630,7 @@ elif today > today_actual:
 if today_str not in data["daily_checklists"]:
     data["daily_checklists"][today_str] = {"tasks": [], "completed": [], "quantities": {}}
 if today_str not in data["daily_metrics"]:
-    data["daily_metrics"][today_str] = {"mood": 5, "energy": 5, "notes": ""}
+    data["daily_metrics"][today_str] = {"mood": 5, "energy": 5}
 
 # Day Context
 date_display = "Today" if today == today_actual else today.strftime("%A, %B %d, %Y")
@@ -794,9 +902,11 @@ with col4:
 st.divider()
 
 # Visualizations
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📈 Trends & Insights",
     "📊 Category Balance",
+    "🔥 Streaks & Habits",
+    "🎯 Goals & Review",
     "📅 History"
 ])
 
@@ -1087,6 +1197,267 @@ with tab2:
         st.markdown(f"- {insight}")
 
 with tab3:
+    st.header("🔥 Streaks & Habits")
+    st.caption("Track your consistency and build strong habits")
+
+    # Overall positive day streak
+    positive_streak = get_positive_day_streak(today_actual)
+
+    st.subheader("📊 Overall Performance")
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("🔥 Current Positive Day Streak", f"{positive_streak} days")
+
+    with col2:
+        # Calculate best day streak ever
+        best_streak = 0
+        temp_streak = 0
+        for i in range(180):  # Check last 6 months
+            check_date = today_actual - timedelta(days=i)
+            date_str = check_date.strftime("%Y-%m-%d")
+            if get_day_points(date_str) > 0:
+                temp_streak += 1
+                if temp_streak > best_streak:
+                    best_streak = temp_streak
+            elif date_str in data["daily_checklists"] and data["daily_checklists"][date_str].get("tasks"):
+                temp_streak = 0
+        st.metric("⭐ Best Streak Ever", f"{best_streak} days")
+
+    with col3:
+        # Overall consistency (days with positive net points)
+        logged_days = 0
+        positive_days = 0
+        for i in range(30):
+            check_date = today_actual - timedelta(days=i)
+            date_str = check_date.strftime("%Y-%m-%d")
+            if date_str in data["daily_checklists"] and data["daily_checklists"][date_str].get("tasks"):
+                logged_days += 1
+                if get_day_points(date_str) > 0:
+                    positive_days += 1
+        consistency = (positive_days / logged_days * 100) if logged_days > 0 else 0
+        st.metric("📈 30-Day Win Rate", f"{consistency:.0f}%")
+
+    st.divider()
+
+    # Individual task streaks and consistency
+    st.subheader("📋 Task Performance (Last 30 Days)")
+
+    unique_tasks = get_all_unique_tasks(30)
+
+    if unique_tasks:
+        # Calculate stats for each task
+        task_stats = []
+        for task_name in unique_tasks:
+            current_streak, longest_streak = get_task_streak(task_name, today_actual, 90)
+            consistency = get_task_consistency(task_name, today_actual, 30)
+
+            task_stats.append({
+                "Task": task_name,
+                "Current Streak": current_streak,
+                "Longest Streak": longest_streak,
+                "Consistency": consistency
+            })
+
+        # Sort by current streak descending
+        task_stats.sort(key=lambda x: (x["Current Streak"], x["Consistency"]), reverse=True)
+
+        df_streaks = pd.DataFrame(task_stats)
+
+        # Format the dataframe
+        df_display = df_streaks.copy()
+        df_display["Current Streak"] = df_display["Current Streak"].apply(lambda x: f"🔥 {x} days" if x > 0 else "-")
+        df_display["Longest Streak"] = df_display["Longest Streak"].apply(lambda x: f"⭐ {x} days")
+        df_display["Consistency"] = df_display["Consistency"].apply(lambda x: f"{x:.0f}%")
+
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # Streak insights
+        st.subheader("💡 Habit Insights")
+
+        insights = []
+
+        # Best performers
+        top_tasks = [t for t in task_stats if t["Current Streak"] >= 7]
+        if top_tasks:
+            task_names = ", ".join([f"**{t['Task']}**" for t in top_tasks[:3]])
+            insights.append(f"🌟 Strong habits: {task_names} - Keep it up!")
+
+        # Tasks with high consistency but no streak
+        consistent_no_streak = [t for t in task_stats if t["Consistency"] >= 80 and t["Current Streak"] == 0]
+        if consistent_no_streak:
+            task_name = consistent_no_streak[0]["Task"]
+            insights.append(f"💪 **{task_name}** has high consistency but streak broke - easy to restart!")
+
+        # Tasks needing attention
+        low_consistency = [t for t in task_stats if t["Consistency"] < 50 and t["Consistency"] > 0]
+        if low_consistency:
+            task_name = low_consistency[0]["Task"]
+            insights.append(f"⚠️ **{task_name}** needs attention - only {low_consistency[0]['Consistency']:.0f}% consistency")
+
+        # Habit strength classification
+        establishing = [t for t in task_stats if 50 <= t["Consistency"] < 80]
+        established = [t for t in task_stats if t["Consistency"] >= 80]
+
+        if established:
+            insights.append(f"✅ You have **{len(established)}** established habit{'s' if len(established) != 1 else ''} (80%+ consistency)")
+
+        if establishing:
+            insights.append(f"🔨 You're building **{len(establishing)}** habit{'s' if len(establishing) != 1 else ''} (50-80% consistency)")
+
+        for insight in insights:
+            st.markdown(f"- {insight}")
+
+    else:
+        st.info("Start completing tasks to see streak and consistency data!")
+
+with tab4:
+    st.header("🎯 Goals & Review")
+    st.caption("Set goals and reflect on your progress")
+
+    # Goal setting section
+    st.subheader("🎯 Goals")
+
+    goal_type = st.selectbox("Goal Type", ["Weekly", "Monthly", "Yearly"])
+
+    goal_key = goal_type.lower()
+
+    # Display existing goals
+    if data["goals"][goal_key]:
+        st.write(f"**Current {goal_type} Goals:**")
+        goals_to_delete = []
+        for goal_name, goal_info in data["goals"][goal_key].items():
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                # Calculate progress if it's a point goal
+                if goal_info.get("type") == "points":
+                    target = goal_info.get("target", 0)
+                    # Calculate current progress based on goal period
+                    if goal_type == "Weekly":
+                        week_start = get_week_start(today_actual)
+                        current = 0
+                        for i in range(7):
+                            check_date = week_start + timedelta(days=i)
+                            if check_date <= today_actual:
+                                date_str = check_date.strftime("%Y-%m-%d")
+                                current += get_day_points(date_str)
+                    elif goal_type == "Monthly":
+                        month_start = today_actual.replace(day=1)
+                        current = 0
+                        check_date = month_start
+                        while check_date <= today_actual:
+                            date_str = check_date.strftime("%Y-%m-%d")
+                            current += get_day_points(date_str)
+                            check_date += timedelta(days=1)
+                    else:  # Yearly
+                        year_start = today_actual.replace(month=1, day=1)
+                        current = 0
+                        check_date = year_start
+                        while check_date <= today_actual:
+                            date_str = check_date.strftime("%Y-%m-%d")
+                            current += get_day_points(date_str)
+                            check_date += timedelta(days=1)
+
+                    progress_pct = (current / target * 100) if target > 0 else 0
+                    st.write(f"**{goal_name}**")
+                    st.progress(min(progress_pct / 100, 1.0))
+                    st.caption(f"{current:.0f} / {target:.0f} points ({progress_pct:.0f}%)")
+                else:
+                    st.write(f"**{goal_name}**: {goal_info.get('description', 'No description')}")
+
+            with col2:
+                if goal_info.get("type") == "points":
+                    if progress_pct >= 100:
+                        st.success("✅ Done!")
+                    else:
+                        remaining = target - current
+                        st.info(f"{remaining:.0f} left")
+
+            with col3:
+                if st.button("🗑️", key=f"delete_goal_{goal_type}_{goal_name}"):
+                    goals_to_delete.append(goal_name)
+
+        # Delete marked goals
+        for goal_name in goals_to_delete:
+            del data["goals"][goal_key][goal_name]
+            save_data(data)
+            st.rerun()
+
+    st.divider()
+
+    # Add new goal
+    st.write("**Add New Goal:**")
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        new_goal_name = st.text_input("Goal Name", key=f"new_goal_name_{goal_type}")
+
+    with col2:
+        new_goal_target = st.number_input("Target Points", min_value=1, value=100, key=f"new_goal_target_{goal_type}")
+
+    if st.button("➕ Add Goal", key=f"add_goal_{goal_type}"):
+        if new_goal_name:
+            data["goals"][goal_key][new_goal_name] = {
+                "type": "points",
+                "target": new_goal_target,
+                "created": datetime.now().strftime("%Y-%m-%d")
+            }
+            save_data(data)
+            st.success(f"✅ Added goal: {new_goal_name}")
+            st.rerun()
+        else:
+            st.warning("Please enter a goal name")
+
+    st.divider()
+
+    # Weekly review section
+    st.subheader("📝 Weekly Review")
+
+    week_start = get_week_start(today_actual)
+    week_end = week_start + timedelta(days=6)
+
+    st.write(f"**Week of {week_start.strftime('%b %d')} - {week_end.strftime('%b %d, %Y')}**")
+
+    # Weekly stats
+    week_points = 0
+    week_positive_days = 0
+    week_logged_days = 0
+
+    for i in range(7):
+        check_date = week_start + timedelta(days=i)
+        if check_date <= today_actual:
+            date_str = check_date.strftime("%Y-%m-%d")
+            if date_str in data["daily_checklists"] and data["daily_checklists"][date_str].get("tasks"):
+                week_logged_days += 1
+                day_points = get_day_points(date_str)
+                week_points += day_points
+                if day_points > 0:
+                    week_positive_days += 1
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Points", f"{week_points:.0f}")
+    with col2:
+        st.metric("Positive Days", f"{week_positive_days}/{week_logged_days}")
+    with col3:
+        avg_points = week_points / week_logged_days if week_logged_days > 0 else 0
+        st.metric("Avg Points/Day", f"{avg_points:.1f}")
+
+    # Review prompts
+    st.write("**Reflection Questions:**")
+    st.markdown("""
+    - What were your biggest wins this week?
+    - What challenges did you face?
+    - What patterns did you notice?
+    - What will you focus on next week?
+    """)
+
+    st.info("💡 Tip: Use this weekly review to adjust your goals and habits")
+
+with tab5:
     st.header("📅 History")
 
     # Show past days with their checklists

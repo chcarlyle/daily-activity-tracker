@@ -12,6 +12,16 @@ A personal life tracking app built with Streamlit for monitoring daily habits, t
   - Trends & insights with 7-day moving averages
   - Category balance across life areas (Spiritual, Social, Physical, Intellectual, Other)
   - Smart pattern detection (mood/energy correlations, upward/downward trends)
+- **Streak tracking & habit formation**:
+  - Current and longest streaks for each task
+  - Positive day streak tracking
+  - Consistency scores and habit strength indicators
+  - Personalized habit insights
+- **Goal setting & tracking**:
+  - Weekly, monthly, and yearly goal management
+  - Real-time progress tracking with visual progress bars
+  - Goal completion indicators
+- **Weekly review dashboard** - Structured reflection and planning
 - **Task quick actions** - edit points, save to templates, copy from history
 - **Mood & Energy tracking** - correlate with performance
 
