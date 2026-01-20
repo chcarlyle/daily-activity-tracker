@@ -6,4 +6,3 @@ scipy>=1.13.0
 scikit-learn>=1.3.2
 sqlalchemy>=2.0.0
 alembic>=1.13.0
-anthropic>=0.25.0

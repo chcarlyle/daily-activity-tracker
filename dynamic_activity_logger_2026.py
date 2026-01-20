@@ -957,58 +957,88 @@ def prepare_avatar_analysis_data(session: Session, start_date: datetime.date, en
 
 # AVATAR ALIGNMENT PROMPT TEMPLATE (for future Claude API integration)
 #
-# def generate_avatar_prompt(avatar_description: str, analysis_data: dict) -> str:
-#     return f"""You are analyzing whether a user's behavior aligns with their ideal self.
+def generate_avatar_prompt(avatar_description: str, analysis_data: dict) -> str:
+    """Generate prompt for Claude API to analyze avatar alignment"""
+    return f"""You are analyzing whether a user's behavior aligns with their ideal self.
+
+Avatar (Ideal Self):
+{avatar_description}
+
+Behavior Data (Last 30 days):
+{json.dumps(analysis_data, indent=2)}
+
+Analyze the behavior data and determine how well it aligns with the avatar description. Return ONLY valid JSON with this exact structure (no markdown, no code blocks):
+{{
+  "alignment_score": <number 0-100>,
+  "summary": "<2-3 sentences on overall alignment>",
+  "recommendations": ["<specific action 1>", "<specific action 2>", "<specific action 3>"],
+  "trend": "<improving|declining|stable>",
+  "key_strengths": ["<strength 1>", "<strength 2>"],
+  "areas_for_growth": ["<area 1>", "<area 2>"]
+}}"""
+
+# DISABLED - API-based analysis (uncomment and add anthropic import if you want to enable)
+# def analyze_avatar_alignment(session: Session, avatar_id: int, start_date: datetime.date, end_date: datetime.date) -> AvatarAlignment:
+#     """Call Claude API to analyze avatar alignment"""
+#     try:
+#         # Get avatar and prepare data
+#         avatar = session.query(Avatar).filter_by(id=avatar_id).first()
+#         if not avatar:
+#             raise ValueError(f"Avatar with id {avatar_id} not found")
 #
-# Avatar (Ideal Self):
-# {avatar_description}
+#         analysis_data = prepare_avatar_analysis_data(session, start_date, end_date)
+#         prompt = generate_avatar_prompt(avatar.description, analysis_data)
 #
-# Behavior Data (Last 30 days):
-# {json.dumps(analysis_data, indent=2)}
+#         # Call Anthropic API
+#         import anthropic
+#         client = anthropic.Anthropic(api_key=st.secrets["anthropic"]["api_key"])
+#         response = client.messages.create(
+#             model="claude-3-5-sonnet-20241022",
+#             max_tokens=2048,
+#             messages=[{"role": "user", "content": prompt}]
+#         )
 #
-# Analyze and return JSON:
-# {{
-#   "alignment_score": 0-100,
-#   "summary": "2-3 sentences on alignment",
-#   "recommendations": ["specific action 1", "specific action 2", "specific action 3"],
-#   "trend": "improving|declining|stable",
-#   "key_strengths": ["strength 1", "strength 2"],
-#   "areas_for_growth": ["area 1", "area 2"]
-# }}
-# """
+#         # Parse response
+#         response_text = response.content[0].text.strip()
 #
-# def analyze_avatar_alignment(session: Session, avatar_id: int, start_date: datetime.date, end_date: datetime.date):
-#     """Call Claude API to analyze avatar alignment (FUTURE IMPLEMENTATION)"""
-#     # avatar = session.query(Avatar).filter_by(id=avatar_id).first()
-#     # analysis_data = prepare_avatar_analysis_data(session, start_date, end_date)
-#     # prompt = generate_avatar_prompt(avatar.description, analysis_data)
-#     #
-#     # # Call Anthropic API
-#     # import anthropic
-#     # client = anthropic.Anthropic(api_key=st.secrets["anthropic"]["api_key"])
-#     # response = client.messages.create(
-#     #     model="claude-3-5-sonnet-20241022",
-#     #     max_tokens=1024,
-#     #     messages=[{"role": "user", "content": prompt}]
-#     # )
-#     #
-#     # # Parse response and save to database
-#     # result = json.loads(response.content[0].text)
-#     # alignment = AvatarAlignment(
-#     #     avatar_id=avatar_id,
-#     #     analysis_date=datetime.now().date(),
-#     #     start_date=start_date,
-#     #     end_date=end_date,
-#     #     alignment_score=result['alignment_score'],
-#     #     alignment_summary=result['summary'],
-#     #     recommendations=json.dumps(result['recommendations']),
-#     #     trend=result['trend'],
-#     #     llm_model='claude-3-5-sonnet',
-#     #     llm_prompt_version='v1.0'
-#     # )
-#     # session.add(alignment)
-#     # session.commit()
-#     pass
+#         # Remove markdown code blocks if present
+#         if response_text.startswith("```"):
+#             response_text = response_text.split("```")[1]
+#             if response_text.startswith("json"):
+#                 response_text = response_text[4:]
+#             response_text = response_text.strip()
+#
+#         result = json.loads(response_text)
+#
+#         # Save alignment to database
+#         alignment = AvatarAlignment(
+#             avatar_id=avatar_id,
+#             analysis_date=datetime.now().date(),
+#             start_date=start_date,
+#             end_date=end_date,
+#             alignment_score=result['alignment_score'],
+#             alignment_summary=result['summary'],
+#             recommendations=json.dumps(result['recommendations']),
+#             trend=result.get('trend', 'stable'),
+#             llm_model='claude-3-5-sonnet-20241022',
+#             llm_prompt_version='v1.0'
+#         )
+#         session.add(alignment)
+#         session.commit()
+#
+#         return alignment
+#
+#     except Exception as e:
+#         st.error(f"Error analyzing avatar alignment: {str(e)}")
+#         raise
+
+def get_alignment_history(session: Session, avatar_id: int, limit: int = 10) -> List[AvatarAlignment]:
+    """Get recent alignment analysis history for an avatar"""
+    return session.query(AvatarAlignment)\
+        .filter_by(avatar_id=avatar_id)\
+        .order_by(AvatarAlignment.analysis_date.desc())\
+        .limit(limit)\
+        .all()
 
 # ============================================================================
 # DATABASE MIGRATION LOGIC
@@ -1519,10 +1549,48 @@ with st.sidebar:
         st.write("**Import Data**")
         st.info("💡 Import from JSON coming soon! Use export for now to backup your data.")
 
-    # LLM Export
-    with st.expander("🤖 Export for LLM"):
-        if st.button("Generate Export"):
-            st.info("Export functionality available - see original version")
+    # Avatar Management
+    with st.expander("🎯 My Avatar (Ideal Self)"):
+        st.write("**Define Your Ideal Self**")
+        st.caption("Describe who you want to become. Claude AI will analyze if your behavior aligns with this avatar.")
+
+        # Get current active avatar
+        current_avatar = get_active_avatar(db_session)
+
+        # Avatar form
+        avatar_name = st.text_input(
+            "Avatar Name",
+            value=current_avatar.name if current_avatar else "",
+            placeholder="e.g., My Best Self"
+        )
+
+        avatar_description = st.text_area(
+            "Avatar Description",
+            value=current_avatar.description if current_avatar else "",
+            placeholder="I am someone who prioritizes spiritual growth through daily scripture study, maintains physical health through exercise, nurtures meaningful relationships, and contributes to society...",
+            height=150
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 Save Avatar", use_container_width=True):
+                if avatar_name and avatar_description:
+                    save_avatar(db_session, avatar_name, avatar_description)
+                    st.success("✅ Avatar saved!")
+                    st.rerun()
+                else:
+                    st.warning("Please provide both name and description")
+
+        with col2:
+            if current_avatar and st.button("🗑️ Delete Avatar", use_container_width=True):
+                if delete_avatar(db_session, current_avatar.id):
+                    st.success("Avatar deleted")
+                    st.rerun()
+
+        if current_avatar:
+            st.divider()
+            st.info(f"💡 Current Avatar: **{current_avatar.name}**")
+            st.caption(f"Created: {current_avatar.created_at.strftime('%Y-%m-%d')}")
 
 # Main content
 st.title("📖 LifeTracker")
@@ -1779,10 +1847,11 @@ else:
 st.markdown("---")
 
 # Analytics - Consolidated Tabs
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Analytics & Trends",
     "🔥 Habits & Streaks",
-    "🎯 Goals"
+    "🎯 Goals",
+    "🎯 Avatar Alignment"
 ])
 
 with tab1:
@@ -2369,6 +2438,197 @@ with tab3:
                 for task in tasks:
                     if not task.completed:
                         st.write(f"❌ {task.task_name} ({task.points:+}pts)")
+
+with tab4:
+    st.header("🎯 Avatar Alignment Analysis")
+    st.caption("See how well your behavior aligns with your ideal self")
+
+    # Get current avatar
+    current_avatar = get_active_avatar(db_session)
+
+    if not current_avatar:
+        st.warning("⚠️ No avatar defined yet!")
+        st.info("👉 Define your avatar in the sidebar under '🎯 My Avatar (Ideal Self)' to get started.")
+    else:
+        # Display current avatar
+        st.subheader(f"Your Avatar: {current_avatar.name}")
+        with st.expander("📝 Avatar Description", expanded=False):
+            st.write(current_avatar.description)
+
+        st.divider()
+
+        # Analysis controls
+        st.subheader("Generate Analysis Prompt")
+        st.caption("Copy the prompt below and paste it into Claude.ai (or any LLM) to get your alignment analysis")
+
+        if st.button("📋 Generate Prompt", use_container_width=False, type="primary"):
+            st.session_state.show_prompt = True
+
+        if st.session_state.get("show_prompt", False):
+            end_date = today_actual
+            start_date = end_date - timedelta(days=30)
+
+            # Prepare data and generate prompt
+            analysis_data = prepare_avatar_analysis_data(db_session, start_date, end_date)
+            prompt = generate_avatar_prompt(current_avatar.description, analysis_data)
+
+            st.info("📝 **Instructions:** Copy the prompt below, paste it into Claude.ai or another LLM, then paste the response back here.")
+
+            # Display copyable prompt
+            st.text_area(
+                "Prompt for LLM",
+                value=prompt,
+                height=300,
+                help="Copy this entire prompt and paste into Claude.ai"
+            )
+
+            st.divider()
+
+            # Manual response input
+            st.write("**Paste LLM Response Here:**")
+            st.caption("After getting the analysis from your LLM, paste the JSON response below and click Save")
+
+            llm_response = st.text_area(
+                "LLM Response (JSON)",
+                height=200,
+                placeholder='{"alignment_score": 75, "summary": "...", "recommendations": [...], ...}',
+                key="llm_response_input"
+            )
+
+            col1, col2 = st.columns([3, 1])
+            with col2:
+                if st.button("💾 Save Analysis", use_container_width=True):
+                    if llm_response:
+                        try:
+                            # Parse and validate JSON
+                            result = json.loads(llm_response.strip())
+
+                            # Create alignment record
+                            alignment = AvatarAlignment(
+                                avatar_id=current_avatar.id,
+                                analysis_date=datetime.now().date(),
+                                start_date=start_date,
+                                end_date=end_date,
+                                alignment_score=result['alignment_score'],
+                                alignment_summary=result['summary'],
+                                recommendations=json.dumps(result['recommendations']),
+                                trend=result.get('trend', 'stable'),
+                                llm_model='manual-entry',
+                                llm_prompt_version='v1.0'
+                            )
+                            db_session.add(alignment)
+                            db_session.commit()
+
+                            st.success("✅ Analysis saved!")
+                            st.session_state.show_prompt = False
+                            st.rerun()
+                        except json.JSONDecodeError:
+                            st.error("❌ Invalid JSON. Make sure you copied the complete response from the LLM.")
+                        except KeyError as e:
+                            st.error(f"❌ Missing required field: {e}")
+                        except Exception as e:
+                            st.error(f"❌ Error saving analysis: {str(e)}")
+                    else:
+                        st.warning("Please paste the LLM response first")
+
+        st.divider()
+
+        # Get alignment history
+        alignments = get_alignment_history(db_session, current_avatar.id, limit=10)
+
+        if not alignments:
+            st.info("🔍 No alignment analyses yet. Click 'Run Analysis' to get your first insight!")
+        else:
+            # Latest alignment results
+            latest = alignments[0]
+
+            st.subheader("Latest Analysis Results")
+            st.caption(f"Analysis Date: {latest.analysis_date.strftime('%B %d, %Y')}")
+            st.caption(f"Period: {latest.start_date.strftime('%b %d')} - {latest.end_date.strftime('%b %d, %Y')}")
+
+            # Alignment score with color coding
+            score = latest.alignment_score
+            if score >= 80:
+                score_color = "🟢"
+                score_label = "Excellent"
+            elif score >= 60:
+                score_color = "🟡"
+                score_label = "Good"
+            elif score >= 40:
+                score_color = "🟠"
+                score_label = "Fair"
+            else:
+                score_color = "🔴"
+                score_label = "Needs Work"
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Alignment Score", f"{score}%", help=score_label)
+                st.write(f"{score_color} {score_label}")
+            with col2:
+                trend_emoji = {"improving": "📈", "stable": "➡️", "declining": "📉"}
+                st.metric("Trend", latest.trend.title(), help="Compared to previous analyses")
+                st.write(f"{trend_emoji.get(latest.trend, '➡️')} {latest.trend.title()}")
+            with col3:
+                days_analyzed = (latest.end_date - latest.start_date).days
+                st.metric("Days Analyzed", f"{days_analyzed}")
+
+            st.divider()
+
+            # Summary
+            st.subheader("📝 Summary")
+            st.write(latest.alignment_summary)
+
+            st.divider()
+
+            # Recommendations
+            st.subheader("💡 Recommendations")
+            recommendations = json.loads(latest.recommendations)
+            for i, rec in enumerate(recommendations, 1):
+                st.markdown(f"{i}. {rec}")
+
+            st.divider()
+
+            # Alignment history chart
+            if len(alignments) > 1:
+                st.subheader("📊 Alignment History")
+
+                history_data = []
+                for alignment in reversed(alignments):
+                    history_data.append({
+                        "Date": alignment.analysis_date,
+                        "Score": alignment.alignment_score
+                    })
+
+                df_history = pd.DataFrame(history_data)
+
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=df_history['Date'],
+                    y=df_history['Score'],
+                    mode='lines+markers',
+                    name='Alignment Score',
+                    line=dict(color='#1f77b4', width=3),
+                    marker=dict(size=8)
+                ))
+
+                fig.update_layout(
+                    xaxis_title="Analysis Date",
+                    yaxis_title="Alignment Score (%)",
+                    yaxis_range=[0, 100],
+                    height=300,
+                    hovermode='x unified'
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
+            # View all analyses
+            if len(alignments) > 1:
+                with st.expander(f"📜 View All Analyses ({len(alignments)})", expanded=False):
+                    for alignment in alignments:
+                        st.write(f"**{alignment.analysis_date.strftime('%B %d, %Y')}** - Score: {alignment.alignment_score}%")
+                        st.caption(alignment.alignment_summary)
+                        st.divider()
 
 # Footer
 st.divider()
