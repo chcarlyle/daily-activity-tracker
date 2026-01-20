@@ -1,6 +1,8 @@
-# Daily Activity Tracker
+# LifeTracker
 
-A personal life tracking app built with Streamlit for monitoring daily habits, tasks, and goals.
+A clean, minimal personal life tracking app built with Streamlit for monitoring daily habits, tasks, and goals.
+
+**v4.0** - Redesigned for simplicity and speed.
 
 ## Features
 

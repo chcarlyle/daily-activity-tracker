@@ -1,6 +1,28 @@
 # LifeTracker Improvements
 
-## Latest Changes (v3.0)
+## Latest Changes (v4.0 - Redesigned UI)
+
+### User Experience Overhaul
+- **Simplified task entry** - Collapsible "Add Tasks" section with template buttons and quick custom task form
+- **Compact dashboard** - Key metrics displayed in a single row at top (Points, Completion %, Streak, Mood, Energy)
+- **Cleaner date navigation** - Streamlined navigation with context-aware date display
+- **Task list reorganization** - Category-based expandable sections replacing multi-column layout
+- **Consolidated tabs** - Reduced from 5 tabs to 3 focused sections:
+  - 📊 Analytics & Trends (combines Trends and Category Balance)
+  - 🔥 Habits & Streaks (streak tracking and consistency)
+  - 🎯 Goals (goal tracking, weekly review, and history)
+- **Mobile-optimized** - Single-column layouts work better on all screen sizes
+- **Simplified actions** - Removed complex popover menus, streamlined to essential delete button
+- **Quick template loader** - One-click button to load all templates at once
+- **Minimal design** - More white space, clearer visual hierarchy, less clutter
+
+### Design Philosophy
+- Focus on speed of daily logging
+- Reduce clicks and cognitive load
+- Better balance between logging and analytics
+- Responsive design that works well on mobile and desktop
+
+## Previous Updates (v3.0)
 
 ### Productivity & Habit Building Features
 - **Removed notes field** - Cleaned up unused daily_metrics notes structure

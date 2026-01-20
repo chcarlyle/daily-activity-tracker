@@ -568,11 +568,9 @@ with st.sidebar:
             st.info("Export functionality available - see original version")
 
 # Main content
-st.title("📖 Dynamic Daily Activity Logger")
-st.markdown("*Flexible day-by-day tracking with custom checklists*")
+st.title("📖 LifeTracker")
 
-# Date Navigation
-st.header("📅 Date Selection")
+# Date Navigation (more compact)
 
 # Initialize session state for selected date
 if "selected_date" not in st.session_state:
@@ -580,51 +578,48 @@ if "selected_date" not in st.session_state:
 
 today_actual = datetime.now(ZoneInfo("America/New_York")).date()
 
-# Date navigation controls
-col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
+# Use selected date
+today = st.session_state.selected_date
+today_str = today.strftime("%Y-%m-%d")
 
-with col1:
-    if st.button("⏮️ -7 Days"):
-        st.session_state.selected_date = st.session_state.selected_date - timedelta(days=7)
-        st.rerun()
+# Compact date navigation in a single row
+date_col1, date_col2, date_col3, date_col4 = st.columns([1, 3, 1, 1])
 
-with col2:
-    if st.button("◀️ Previous"):
+with date_col1:
+    if st.button("◀️"):
         st.session_state.selected_date = st.session_state.selected_date - timedelta(days=1)
         st.rerun()
 
-with col3:
+with date_col2:
+    date_display = "Today" if today == today_actual else today.strftime("%A, %B %d, %Y")
+    if today < today_actual:
+        days_ago = (today_actual - today).days
+        date_display = f"{today.strftime('%a, %b %d')} ({days_ago}d ago)"
+    elif today > today_actual:
+        days_ahead = (today - today_actual).days
+        date_display = f"{today.strftime('%a, %b %d')} (in {days_ahead}d)"
+
     selected_date = st.date_input(
-        "Select Date",
+        "Date",
         value=st.session_state.selected_date,
-        key="date_picker"
+        key="date_picker",
+        label_visibility="collapsed"
     )
     if selected_date != st.session_state.selected_date:
         st.session_state.selected_date = selected_date
         st.rerun()
 
-with col4:
-    if st.button("▶️ Next"):
-        next_date = st.session_state.selected_date + timedelta(days=1)
-        st.session_state.selected_date = next_date
+    st.caption(date_display)
+
+with date_col3:
+    if st.button("▶️"):
+        st.session_state.selected_date = st.session_state.selected_date + timedelta(days=1)
         st.rerun()
 
-with col5:
-    if st.button("📍 Today"):
+with date_col4:
+    if st.button("Today"):
         st.session_state.selected_date = today_actual
         st.rerun()
-
-# Use selected date instead of today
-today = st.session_state.selected_date
-today_str = today.strftime("%Y-%m-%d")
-
-# Show if viewing past/future
-if today < today_actual:
-    days_ago = (today_actual - today).days
-    st.info(f"📆 Viewing {days_ago} day{'s' if days_ago > 1 else ''} ago")
-elif today > today_actual:
-    days_ahead = (today - today_actual).days
-    st.info(f"📅 Planning ahead: {days_ahead} day{'s' if days_ahead > 1 else ''} from now")
 
 # Initialize today's data
 if today_str not in data["daily_checklists"]:
@@ -632,86 +627,101 @@ if today_str not in data["daily_checklists"]:
 if today_str not in data["daily_metrics"]:
     data["daily_metrics"][today_str] = {"mood": 5, "energy": 5}
 
-# Day Context
-date_display = "Today" if today == today_actual else today.strftime("%A, %B %d, %Y")
-st.header(f"🗓️ {date_display}")
+# Quick Dashboard
+st.markdown("###")  # Spacing
 
-col1, col2 = st.columns(2)
+# Get today's stats
+positive_pts, negative_pts = get_day_points(today_str, separate=True)
+net_pts = positive_pts + negative_pts
+completion_rate = 0
+if data["daily_checklists"][today_str]["tasks"]:
+    completion_rate = len(data["daily_checklists"][today_str]["completed"]) / len(data["daily_checklists"][today_str]["tasks"]) * 100
 
-with col1:
-    mood_val = st.slider("😊 Mood", 1, 10, value=data["daily_metrics"][today_str].get("mood", 5))
+positive_streak = get_positive_day_streak(today_actual)
+
+# Dashboard metrics in a clean row
+dash_col1, dash_col2, dash_col3, dash_col4, dash_col5, dash_col6 = st.columns(6)
+
+with dash_col1:
+    st.metric("Points", f"{net_pts:+.0f}", delta=f"{net_pts:+.0f}" if net_pts != 0 else None, delta_color="normal" if net_pts > 0 else "inverse")
+
+with dash_col2:
+    st.metric("Completed", f"{completion_rate:.0f}%")
+
+with dash_col3:
+    st.metric("Streak", f"🔥 {positive_streak}")
+
+with dash_col4:
+    mood_val = st.select_slider("😊", options=list(range(1, 11)), value=data["daily_metrics"][today_str].get("mood", 5), label_visibility="collapsed", key="mood_quick")
+    st.caption("Mood")
     if mood_val != data["daily_metrics"][today_str].get("mood"):
         data["daily_metrics"][today_str]["mood"] = mood_val
         save_data(data)
 
-with col2:
-    energy_val = st.slider("⚡ Energy", 1, 10, value=data["daily_metrics"][today_str].get("energy", 5))
+with dash_col5:
+    energy_val = st.select_slider("⚡", options=list(range(1, 11)), value=data["daily_metrics"][today_str].get("energy", 5), label_visibility="collapsed", key="energy_quick")
+    st.caption("Energy")
     if energy_val != data["daily_metrics"][today_str].get("energy"):
         data["daily_metrics"][today_str]["energy"] = energy_val
         save_data(data)
 
-st.divider()
+with dash_col6:
+    # Quick template loader
+    if st.button("⚡ Load All Templates", use_container_width=True, help="Add all template tasks at once"):
+        existing_task_names = {task["name"] for task in data["daily_checklists"][today_str]["tasks"]}
+        for template_name, tasks in data["checklist_templates"].items():
+            for task in tasks:
+                if task["name"] not in existing_task_names:
+                    data["daily_checklists"][today_str]["tasks"].append(task.copy())
+        save_data(data)
+        st.rerun()
 
-# Build Today's Checklist
-checklist_header = "Today's Checklist" if today == today_actual else f"Checklist for {today.strftime('%b %d')}"
-st.header(f"✅ {checklist_header}")
+st.markdown("---")  # Cleaner divider
 
-col1, col2 = st.columns([2, 1])
+# Task Entry - Simple and clean
+with st.expander("➕ Add Tasks", expanded=len(data["daily_checklists"][today_str]["tasks"]) == 0):
+    add_col1, add_col2 = st.columns([2, 1])
 
-with col1:
-    st.subheader("Add Tasks from Templates")
-    
-    template_cols = st.columns(len(data["checklist_templates"]))
-    
-    for idx, (template_name, tasks) in enumerate(data["checklist_templates"].items()):
-        with template_cols[idx]:
-            if st.button(f"➕ {template_name}", use_container_width=True):
-                # Add all tasks from template
-                existing_task_names = {task["name"] for task in data["daily_checklists"][today_str]["tasks"]}
-                for task in tasks:
-                    if task["name"] not in existing_task_names:
-                        data["daily_checklists"][today_str]["tasks"].append(task)
-                save_data(data)
-                st.rerun()
+    with add_col1:
+        st.write("**From Templates:**")
+        template_row_cols = st.columns(len(data["checklist_templates"]))
+        for idx, (template_name, tasks) in enumerate(data["checklist_templates"].items()):
+            with template_row_cols[idx]:
+                if st.button(f"{template_name}", use_container_width=True, key=f"add_template_{idx}"):
+                    existing_task_names = {task["name"] for task in data["daily_checklists"][today_str]["tasks"]}
+                    for task in tasks:
+                        if task["name"] not in existing_task_names:
+                            data["daily_checklists"][today_str]["tasks"].append(task.copy())
+                    save_data(data)
+                    st.rerun()
 
-with col2:
-    st.subheader("Quick Add Task")
-    with st.form("quick_add"):
-        quick_name = st.text_input("Task")
-        quick_col1, quick_col2, quick_col3 = st.columns(3)
-        with quick_col1:
-            quick_cat = st.selectbox("Cat", ["Spiritual", "Social", "Physical", "Intellectual", "Other"], label_visibility="collapsed")
-        with quick_col2:
-            quick_pts = st.number_input("Pts", -50, 50, 10, label_visibility="collapsed")
-        with quick_col3:
-            quick_track = st.checkbox("×", help="Trackable with multiplier?")
-        
-        quick_unit = ""
-        if quick_track:
-            quick_unit = st.text_input("Unit", value="times", placeholder="hours, reps, etc.")
-        
-        if st.form_submit_button("Add"):
-            new_task = {
-                "name": quick_name,
-                "category": quick_cat,
-                "points": quick_pts,
-                "trackable": quick_track
-            }
-            if quick_track:
-                new_task["unit"] = quick_unit
-            
-            data["daily_checklists"][today_str]["tasks"].append(new_task)
-            save_data(data)
-            st.rerun()
+    with add_col2:
+        st.write("**Custom Task:**")
+        with st.form("quick_add", border=False):
+            quick_name = st.text_input("Task name", placeholder="e.g., Meditation")
+            quick_col1, quick_col2 = st.columns([2, 1])
+            with quick_col1:
+                quick_cat = st.selectbox("Category", ["Spiritual", "Social", "Physical", "Intellectual", "Other"])
+            with quick_col2:
+                quick_pts = st.number_input("Points", -50, 50, 10)
 
-st.divider()
+            if st.form_submit_button("Add Task", use_container_width=True):
+                if quick_name:
+                    new_task = {
+                        "name": quick_name,
+                        "category": quick_cat,
+                        "points": quick_pts,
+                        "trackable": False
+                    }
+                    data["daily_checklists"][today_str]["tasks"].append(new_task)
+                    save_data(data)
+                    st.rerun()
 
-# Display and check off tasks
-tasks_header = "Today's Tasks" if today == today_actual else f"Tasks for {today.strftime('%b %d')}"
-st.subheader(f"📝 {tasks_header}")
+# Task List - Clean and simple
+st.markdown("### Tasks")
 
 if not data["daily_checklists"][today_str]["tasks"]:
-    st.info("👆 Add some tasks from templates above, or create a custom task")
+    st.info("No tasks yet - add some using the button above!")
 else:
     # Group by category
     categories = {}
@@ -720,50 +730,42 @@ else:
         if cat not in categories:
             categories[cat] = []
         categories[cat].append(task)
-    
-    # Display by category
-    cat_cols = st.columns(len(categories))
-    
-    for idx, (category, tasks) in enumerate(categories.items()):
-        with cat_cols[idx]:
-            # Category emoji
-            emoji = {"Spiritual": "✨", "Social": "👥", "Physical": "💪", 
-                    "Intellectual": "🧠", "Other": "🏠"}.get(category, "📌")
-            st.markdown(f"### {emoji} {category}")
-            
+
+    # Simple list view - better for mobile
+    for category, tasks in categories.items():
+        emoji = {"Spiritual": "✨", "Social": "👥", "Physical": "💪",
+                "Intellectual": "🧠", "Other": "🏠"}.get(category, "📌")
+
+        with st.expander(f"{emoji} **{category}** ({len([t for t in tasks if t['name'] in data['daily_checklists'][today_str]['completed']])}/{len(tasks)})", expanded=True):
             for task in tasks:
                 is_completed = task["name"] in data["daily_checklists"][today_str]["completed"]
-                
-                # Get quantity if trackable
                 quantity = data["daily_checklists"][today_str].get("quantities", {}).get(task["name"], 1)
-                
+
                 # Calculate points
                 base_points = task["points"]
                 if task.get("trackable", False):
                     base_points = base_points * quantity
-
                 adjusted_points = base_points
 
-                # Display task
-                if task.get("trackable", False):
-                    # Trackable task - show quantity input
-                    col1, col2, col3 = st.columns([2, 1, 1])
-                    
-                    with col1:
-                        if st.checkbox(
-                            task["name"],
-                            value=is_completed,
-                            key=f"task_{today_str}_{task['name']}"
-                        ):
-                            if task["name"] not in data["daily_checklists"][today_str]["completed"]:
-                                data["daily_checklists"][today_str]["completed"].append(task["name"])
-                                save_data(data)
-                        else:
-                            if task["name"] in data["daily_checklists"][today_str]["completed"]:
-                                data["daily_checklists"][today_str]["completed"].remove(task["name"])
-                                save_data(data)
-                    
-                    with col2:
+                # Simplified task row
+                task_col1, task_col2, task_col3 = st.columns([4, 2, 1])
+
+                with task_col1:
+                    if st.checkbox(
+                        task["name"],
+                        value=is_completed,
+                        key=f"task_{today_str}_{task['name']}"
+                    ):
+                        if task["name"] not in data["daily_checklists"][today_str]["completed"]:
+                            data["daily_checklists"][today_str]["completed"].append(task["name"])
+                            save_data(data)
+                    else:
+                        if task["name"] in data["daily_checklists"][today_str]["completed"]:
+                            data["daily_checklists"][today_str]["completed"].remove(task["name"])
+                            save_data(data)
+
+                with task_col2:
+                    if task.get("trackable", False):
                         new_quantity = st.number_input(
                             task.get("unit", "qty"),
                             min_value=0.0,
@@ -774,99 +776,23 @@ else:
                             key=f"qty_{today_str}_{task['name']}",
                             label_visibility="collapsed"
                         )
-                        
                         if new_quantity != quantity:
                             if "quantities" not in data["daily_checklists"][today_str]:
                                 data["daily_checklists"][today_str]["quantities"] = {}
                             data["daily_checklists"][today_str]["quantities"][task["name"]] = new_quantity
                             save_data(data)
-                    
-                    with col3:
-                        color = "green" if adjusted_points > 0 else "red"
-                        st.markdown(f":{color}[{adjusted_points:+.1f}]")
                         st.caption(f"{task['points']:+.1f} × {new_quantity:.1f}")
-                
-                else:
-                    # Non-trackable task - simple checkbox
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        if st.checkbox(
-                            task["name"],
-                            value=is_completed,
-                            key=f"task_{today_str}_{task['name']}"
-                        ):
-                            if task["name"] not in data["daily_checklists"][today_str]["completed"]:
-                                data["daily_checklists"][today_str]["completed"].append(task["name"])
-                                save_data(data)
-                        else:
-                            if task["name"] in data["daily_checklists"][today_str]["completed"]:
-                                data["daily_checklists"][today_str]["completed"].remove(task["name"])
-                                save_data(data)
-                    
-                    with col2:
-                        color = "green" if task["points"] > 0 else "red"
-                        st.markdown(f":{color}[{adjusted_points:+.1f}]")
-            
-            # Task action buttons
+
+                with task_col3:
+                    color = "green" if adjusted_points > 0 else "red"
+                    st.markdown(f":{color}[**{adjusted_points:+.0f}**]")
+
+            # Simple action row
             st.write("")
-            for task in tasks:
-                btn_col1, btn_col2, btn_col3 = st.columns([2, 2, 2])
-
-                with btn_col1:
-                    # Edit points
-                    with st.popover(f"✏️ Edit", use_container_width=True):
-                        st.write(f"**{task['name'][:25]}**")
-                        new_points = st.number_input(
-                            "Points",
-                            min_value=-50,
-                            max_value=50,
-                            value=task["points"],
-                            key=f"edit_pts_{today_str}_{task['name']}"
-                        )
-                        if st.button("💾 Save", key=f"save_pts_{today_str}_{task['name']}"):
-                            for t in data["daily_checklists"][today_str]["tasks"]:
-                                if t["name"] == task["name"]:
-                                    t["points"] = new_points
-                                    break
-                            save_data(data)
-                            st.rerun()
-
-                with btn_col2:
-                    # Save to template
-                    with st.popover(f"📋 Save", use_container_width=True):
-                        st.write(f"**Save to Template**")
-                        st.caption(task['name'][:30])
-                        template_list = list(data["checklist_templates"].keys())
-                        template_list.append("+ New Template")
-
-                        selected_template = st.selectbox(
-                            "Template",
-                            template_list,
-                            key=f"tmpl_{today_str}_{task['name']}"
-                        )
-
-                        if selected_template == "+ New Template":
-                            new_template_name = st.text_input("Template Name", key=f"new_tmpl_{today_str}_{task['name']}")
-                            if st.button("Create & Add", key=f"create_tmpl_{today_str}_{task['name']}") and new_template_name:
-                                data["checklist_templates"][new_template_name] = [task.copy()]
-                                save_data(data)
-                                st.success("✅ Template created!")
-                                st.rerun()
-                        else:
-                            if st.button("Add to Template", key=f"add_tmpl_{today_str}_{task['name']}"):
-                                # Check if task already exists
-                                task_names = [t["name"] for t in data["checklist_templates"][selected_template]]
-                                if task["name"] not in task_names:
-                                    data["checklist_templates"][selected_template].append(task.copy())
-                                    save_data(data)
-                                    st.success("✅ Added to template!")
-                                    st.rerun()
-                                else:
-                                    st.warning("Task already in template")
-
-                with btn_col3:
-                    # Delete task
-                    if st.button(f"🗑️ Delete", key=f"remove_{today_str}_{task['name']}", use_container_width=True):
+            action_cols = st.columns(len(tasks))
+            for idx, task in enumerate(tasks):
+                with action_cols[idx]:
+                    if st.button("🗑️", key=f"del_{today_str}_{task['name']}", help=f"Delete {task['name']}"):
                         data["daily_checklists"][today_str]["tasks"] = [
                             t for t in data["daily_checklists"][today_str]["tasks"]
                             if t["name"] != task["name"]
@@ -876,38 +802,13 @@ else:
                         save_data(data)
                         st.rerun()
 
-st.divider()
+st.markdown("---")
 
-# Today's Summary
-summary_header = "Today's Summary" if today == today_actual else f"Summary for {today.strftime('%b %d')}"
-st.subheader(f"📊 {summary_header}")
-
-positive_pts, negative_pts = get_day_points(today_str, separate=True)
-net_pts = positive_pts + negative_pts
-
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.metric("✅ Positive Points", f"+{positive_pts:.1f}")
-with col2:
-    st.metric("❌ Negative Points", f"{negative_pts:.1f}")
-with col3:
-    st.metric("🌟 Net Points", f"{net_pts:+.1f}")
-with col4:
-    completion_rate = 0
-    if data["daily_checklists"][today_str]["tasks"]:
-        completion_rate = len(data["daily_checklists"][today_str]["completed"]) / len(data["daily_checklists"][today_str]["tasks"]) * 100
-    st.metric("Completion", f"{completion_rate:.0f}%")
-
-st.divider()
-
-# Visualizations
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📈 Trends & Insights",
-    "📊 Category Balance",
-    "🔥 Streaks & Habits",
-    "🎯 Goals & Review",
-    "📅 History"
+# Analytics - Consolidated Tabs
+tab1, tab2, tab3 = st.tabs([
+    "📊 Analytics & Trends",
+    "🔥 Habits & Streaks",
+    "🎯 Goals"
 ])
 
 with tab1:
@@ -1196,7 +1097,7 @@ with tab2:
     for insight in balance_insights:
         st.markdown(f"- {insight}")
 
-with tab3:
+with tab2:
     st.header("🔥 Streaks & Habits")
     st.caption("Track your consistency and build strong habits")
 
@@ -1313,7 +1214,7 @@ with tab3:
     else:
         st.info("Start completing tasks to see streak and consistency data!")
 
-with tab4:
+with tab3:
     st.header("🎯 Goals & Review")
     st.caption("Set goals and reflect on your progress")
 
@@ -1457,16 +1358,17 @@ with tab4:
 
     st.info("💡 Tip: Use this weekly review to adjust your goals and habits")
 
-with tab5:
-    st.header("📅 History")
+    st.divider()
 
-    # Show past days with their checklists
-    for i in range(1, 15):  # Last 14 days (increased from 7)
-        check_date = today_actual - timedelta(days=i)
-        date_str = check_date.strftime("%Y-%m-%d")
+    # History section - compact
+    with st.expander("📅 View Past Days", expanded=False):
+        # Show past days with their checklists
+        for i in range(1, 15):  # Last 14 days (increased from 7)
+            check_date = today_actual - timedelta(days=i)
+            date_str = check_date.strftime("%Y-%m-%d")
 
-        if date_str in data["daily_checklists"] and data["daily_checklists"][date_str]["tasks"]:
-            with st.expander(f"{check_date.strftime('%A, %B %d')}"):
+            if date_str in data["daily_checklists"] and data["daily_checklists"][date_str]["tasks"]:
+                st.write(f"**{check_date.strftime('%A, %B %d')}**")
                 pos, neg = get_day_points(date_str, separate=True)
 
                 col1, col2, col3, col4 = st.columns(4)
