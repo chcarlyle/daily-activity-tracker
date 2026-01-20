@@ -390,9 +390,9 @@ def save_data(data):
     return True
 
 def create_backup():
-    """Create a timestamped backup of the data file"""
+    """Create a timestamped backup of the database file"""
     try:
-        if not DATA_FILE.exists():
+        if not DB_FILE.exists():
             return False
 
         # Create backup directory if it doesn't exist
@@ -400,13 +400,13 @@ def create_backup():
 
         # Create timestamped backup filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_file = BACKUP_DIR / f"backup_{timestamp}.json"
+        backup_file = BACKUP_DIR / f"backup_{timestamp}.db"
 
-        # Copy current data file to backup
-        shutil.copy2(DATA_FILE, backup_file)
+        # Copy current database file to backup
+        shutil.copy2(DB_FILE, backup_file)
 
         # Keep only last 30 backups
-        backups = sorted(BACKUP_DIR.glob("backup_*.json"))
+        backups = sorted(BACKUP_DIR.glob("backup_*.db"))
         if len(backups) > 30:
             for old_backup in backups[:-30]:
                 old_backup.unlink()
@@ -462,11 +462,9 @@ def import_data_from_file(uploaded_file):
         st.error(f"Failed to import data: {str(e)}")
         return None
 
-# Load data
-data = load_data()
-
-# Create daily backup if needed
-check_and_create_daily_backup(data)
+# OLD JSON CODE - DISABLED (using database now)
+# data = load_data()
+# check_and_create_daily_backup(data)
 
 # ============================================================================
 # DATABASE HELPER FUNCTIONS
@@ -1519,19 +1517,7 @@ with st.sidebar:
 
         st.divider()
         st.write("**Import Data**")
-        uploaded_file = st.file_uploader("Upload backup JSON", type=['json'])
-        if uploaded_file is not None:
-            imported_data = import_data_from_file(uploaded_file)
-            if imported_data:
-                if st.button("⚠️ Replace Current Data", type="primary"):
-                    # Create backup before importing
-                    create_backup()
-                    data.clear()
-                    data.update(imported_data)
-                    save_data(data)
-                    st.success("✅ Data imported successfully!")
-                    st.rerun()
-                st.warning("This will replace all current data. A backup will be created first.")
+        st.info("💡 Import from JSON coming soon! Use export for now to backup your data.")
 
     # LLM Export
     with st.expander("🤖 Export for LLM"):
