@@ -1793,13 +1793,13 @@ with tab1:
     chart_data = []
     for i in range(30):
         check_date = today_actual - timedelta(days=29-i)
-        date_str = check_date.strftime("%Y-%m-%d")
 
-        pos, neg = get_day_points(date_str, separate=True)
+        pos, neg = get_day_points_db(db_session, check_date, separate=True)
 
         # Get mood and energy if available
-        mood = data["daily_metrics"].get(date_str, {}).get("mood", None)
-        energy = data["daily_metrics"].get(date_str, {}).get("energy", None)
+        metric = get_daily_metric(db_session, check_date)
+        mood = metric.mood if metric else None
+        energy = metric.energy if metric else None
 
         chart_data.append({
             "Date": check_date,
@@ -1957,10 +1957,9 @@ with tab2:
 
     for i in range(30):
         check_date = today_actual - timedelta(days=29-i)
-        date_str = check_date.strftime("%Y-%m-%d")
 
         for category in categories:
-            points = get_category_points(date_str, category)
+            points = get_category_points_db(db_session, check_date, category)
             category_data[category].append({
                 "Date": check_date,
                 "Points": points
@@ -2076,7 +2075,7 @@ with tab2:
     st.caption("Track your consistency and build strong habits")
 
     # Overall positive day streak
-    positive_streak = get_positive_day_streak(today_actual)
+    positive_streak = get_positive_day_streak_db(db_session, today_actual)
 
     st.subheader("📊 Overall Performance")
     col1, col2, col3 = st.columns(3)
@@ -2090,12 +2089,14 @@ with tab2:
         temp_streak = 0
         for i in range(180):  # Check last 6 months
             check_date = today_actual - timedelta(days=i)
-            date_str = check_date.strftime("%Y-%m-%d")
-            if get_day_points(date_str) > 0:
+            day_pts = get_day_points_db(db_session, check_date)
+            tasks_exist = len(get_daily_tasks(db_session, check_date)) > 0
+
+            if day_pts > 0:
                 temp_streak += 1
                 if temp_streak > best_streak:
                     best_streak = temp_streak
-            elif date_str in data["daily_checklists"] and data["daily_checklists"][date_str].get("tasks"):
+            elif tasks_exist:
                 temp_streak = 0
         st.metric("⭐ Best Streak Ever", f"{best_streak} days")
 
@@ -2105,10 +2106,10 @@ with tab2:
         positive_days = 0
         for i in range(30):
             check_date = today_actual - timedelta(days=i)
-            date_str = check_date.strftime("%Y-%m-%d")
-            if date_str in data["daily_checklists"] and data["daily_checklists"][date_str].get("tasks"):
+            tasks = get_daily_tasks(db_session, check_date)
+            if tasks:
                 logged_days += 1
-                if get_day_points(date_str) > 0:
+                if get_day_points_db(db_session, check_date) > 0:
                     positive_days += 1
         consistency = (positive_days / logged_days * 100) if logged_days > 0 else 0
         st.metric("📈 30-Day Win Rate", f"{consistency:.0f}%")
@@ -2118,14 +2119,14 @@ with tab2:
     # Individual task streaks and consistency
     st.subheader("📋 Task Performance (Last 30 Days)")
 
-    unique_tasks = get_all_unique_tasks(30)
+    unique_tasks = get_all_unique_tasks_db(db_session, 30)
 
     if unique_tasks:
         # Calculate stats for each task
         task_stats = []
         for task_name in unique_tasks:
-            current_streak, longest_streak = get_task_streak(task_name, today_actual, 90)
-            consistency = get_task_consistency(task_name, today_actual, 30)
+            current_streak, longest_streak = get_task_streak_db(db_session, task_name, today_actual, 90)
+            consistency = get_task_consistency_db(db_session, task_name, today_actual, 30)
 
             task_stats.append({
                 "Task": task_name,
@@ -2199,11 +2200,14 @@ with tab3:
 
     goal_key = goal_type.lower()
 
-    # Display existing goals
-    if data["goals"][goal_key]:
+    # Display existing goals from database
+    existing_goals = get_goals_by_type(db_session, goal_type)
+    if existing_goals:
         st.write(f"**Current {goal_type} Goals:**")
         goals_to_delete = []
-        for goal_name, goal_info in data["goals"][goal_key].items():
+        for goal in existing_goals:
+            goal_name = goal.goal_name
+            goal_info = {"type": "points", "target": goal.target_value or 0}
             col1, col2, col3 = st.columns([3, 1, 1])
             with col1:
                 # Calculate progress if it's a point goal
@@ -2216,23 +2220,20 @@ with tab3:
                         for i in range(7):
                             check_date = week_start + timedelta(days=i)
                             if check_date <= today_actual:
-                                date_str = check_date.strftime("%Y-%m-%d")
-                                current += get_day_points(date_str)
+                                current += get_day_points_db(db_session, check_date)
                     elif goal_type == "Monthly":
                         month_start = today_actual.replace(day=1)
                         current = 0
                         check_date = month_start
                         while check_date <= today_actual:
-                            date_str = check_date.strftime("%Y-%m-%d")
-                            current += get_day_points(date_str)
+                            current += get_day_points_db(db_session, check_date)
                             check_date += timedelta(days=1)
                     else:  # Yearly
                         year_start = today_actual.replace(month=1, day=1)
                         current = 0
                         check_date = year_start
                         while check_date <= today_actual:
-                            date_str = check_date.strftime("%Y-%m-%d")
-                            current += get_day_points(date_str)
+                            current += get_day_points_db(db_session, check_date)
                             check_date += timedelta(days=1)
 
                     progress_pct = (current / target * 100) if target > 0 else 0
@@ -2256,8 +2257,7 @@ with tab3:
 
         # Delete marked goals
         for goal_name in goals_to_delete:
-            del data["goals"][goal_key][goal_name]
-            save_data(data)
+            delete_goal(db_session, goal_type, goal_name)
             st.rerun()
 
     st.divider()
@@ -2275,12 +2275,13 @@ with tab3:
 
     if st.button("➕ Add Goal", key=f"add_goal_{goal_type}"):
         if new_goal_name:
-            data["goals"][goal_key][new_goal_name] = {
-                "type": "points",
-                "target": new_goal_target,
-                "created": datetime.now().strftime("%Y-%m-%d")
-            }
-            save_data(data)
+            save_goal(
+                db_session,
+                goal_type=goal_type,
+                goal_name=new_goal_name,
+                target_value=new_goal_target,
+                description=f"{new_goal_target} points"
+            )
             st.success(f"✅ Added goal: {new_goal_name}")
             st.rerun()
         else:
@@ -2304,10 +2305,10 @@ with tab3:
     for i in range(7):
         check_date = week_start + timedelta(days=i)
         if check_date <= today_actual:
-            date_str = check_date.strftime("%Y-%m-%d")
-            if date_str in data["daily_checklists"] and data["daily_checklists"][date_str].get("tasks"):
+            tasks = get_daily_tasks(db_session, check_date)
+            if tasks:
                 week_logged_days += 1
-                day_points = get_day_points(date_str)
+                day_points = get_day_points_db(db_session, check_date)
                 week_points += day_points
                 if day_points > 0:
                     week_positive_days += 1
@@ -2339,74 +2340,35 @@ with tab3:
         # Show past days with their checklists
         for i in range(1, 15):  # Last 14 days (increased from 7)
             check_date = today_actual - timedelta(days=i)
-            date_str = check_date.strftime("%Y-%m-%d")
 
-            if date_str in data["daily_checklists"] and data["daily_checklists"][date_str]["tasks"]:
+            tasks = get_daily_tasks(db_session, check_date)
+            if tasks:
                 st.write(f"**{check_date.strftime('%A, %B %d')}**")
-                pos, neg = get_day_points(date_str, separate=True)
+                pos, neg = get_day_points_db(db_session, check_date, separate=True)
 
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     st.metric("Positive", f"+{pos:.1f}")
                 with col2:
                     st.metric("Negative", f"{neg:.1f}")
                 with col3:
                     st.metric("Net", f"{pos+neg:+.1f}")
-                with col4:
-                    # Quick action to copy all tasks to today
-                    if st.button("📋 Copy All to Today", key=f"copy_all_{date_str}"):
-                        today_str_actual = today_actual.strftime("%Y-%m-%d")
-                        if today_str_actual not in data["daily_checklists"]:
-                            data["daily_checklists"][today_str_actual] = {"tasks": [], "completed": [], "quantities": {}}
 
-                        existing_names = {t["name"] for t in data["daily_checklists"][today_str_actual]["tasks"]}
-                        tasks_to_copy = data["daily_checklists"][date_str]["tasks"]
-
-                        for task in tasks_to_copy:
-                            if task["name"] not in existing_names:
-                                data["daily_checklists"][today_str_actual]["tasks"].append(task.copy())
-
-                        save_data(data)
-                        st.success(f"✅ Copied {len(tasks_to_copy)} tasks to today!")
-                        st.rerun()
-
-                completed = data["daily_checklists"][date_str].get("completed", [])
-                tasks = data["daily_checklists"][date_str]["tasks"]
-                quantities = data["daily_checklists"][date_str].get("quantities", {})
-
+                # Show task list
                 st.write("**Completed:**")
                 for task in tasks:
-                    if task["name"] in completed:
-                        points = task["points"]
-                        display_text = f"✅ {task['name']}"
-
-                        if task.get("trackable", False):
-                            quantity = quantities.get(task["name"], 1)
-                            points = points * quantity
-                            display_text += f" (×{quantity:.1f})"
-
-                        display_text += f" ({points:+.1f}pts)"
-
-                        # Add button to copy individual task to today
-                        task_col1, task_col2 = st.columns([4, 1])
-                        with task_col1:
-                            st.write(display_text)
-                        with task_col2:
-                            if st.button("📋", key=f"copy_{date_str}_{task['name']}", help="Copy to today"):
-                                today_str_actual = today_actual.strftime("%Y-%m-%d")
-                                if today_str_actual not in data["daily_checklists"]:
-                                    data["daily_checklists"][today_str_actual] = {"tasks": [], "completed": [], "quantities": {}}
-
-                                existing_names = {t["name"] for t in data["daily_checklists"][today_str_actual]["tasks"]}
-                                if task["name"] not in existing_names:
-                                    data["daily_checklists"][today_str_actual]["tasks"].append(task.copy())
-                                    save_data(data)
-                                    st.rerun()
+                    if task.completed:
+                        points = task.points
+                        if task.trackable and task.quantity:
+                            points = points * task.quantity
+                            st.write(f"✅ {task.task_name} (×{task.quantity:.1f}) ({points:+.1f}pts)")
+                        else:
+                            st.write(f"✅ {task.task_name} ({points:+.1f}pts)")
 
                 st.write("**Not Completed:**")
                 for task in tasks:
-                    if task["name"] not in completed:
-                        st.write(f"❌ {task['name']} ({task['points']:+}pts)")
+                    if not task.completed:
+                        st.write(f"❌ {task.task_name} ({task.points:+}pts)")
 
 # Footer
 st.divider()
