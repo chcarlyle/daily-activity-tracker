@@ -26,7 +26,7 @@ st.markdown("""
     /* Hide Streamlit branding */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
+    /* Keep header visible for sidebar toggle button */
     
     /* PWA meta tags */
     <meta name="apple-mobile-web-app-capable" content="yes">
