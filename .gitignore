@@ -1,0 +1,34 @@
+# Secrets and sensitive data
+.streamlit/secrets.toml
+
+# Personal data files
+dynamic_activity_log_2026.json
+backups/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+venv/
+env/
+ENV/
+.venv

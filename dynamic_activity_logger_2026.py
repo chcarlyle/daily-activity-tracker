@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from scipy import stats
 from sklearn.linear_model import LinearRegression
+import shutil
+import base64
 
 # Page config - must be first Streamlit command
 st.set_page_config(
@@ -133,6 +135,7 @@ if not check_password():
 
 # Data storage path
 DATA_FILE = Path("dynamic_activity_log_2026.json")
+BACKUP_DIR = Path("backups")
 
 # Day type configurations
 DAY_TYPE_CONFIG = {
@@ -175,77 +178,180 @@ DAY_TYPE_CONFIG = {
 
 # Initialize data structure
 def load_data():
+    """Load data with error handling and automatic recovery"""
+    default_data = {
+        "daily_checklists": {},  # {date: {tasks: [], completed: [], quantities: {task_name: count}}}
+        "day_types": {},  # {date: "normal/travel/sabbath/sick/high_performance"}
+        "checklist_templates": {
+            "Morning Routine": [
+                {"name": "Scripture Study (15 min)", "category": "Spiritual", "points": 15},
+                {"name": "Personal Prayer (morning)", "category": "Spiritual", "points": 5},
+                {"name": "Brush Teeth (morning)", "category": "Physical", "points": 1},
+                {"name": "Shower", "category": "Physical", "points": 3},
+                {"name": "Make Bed", "category": "Other", "points": 5},
+            ],
+            "Evening Routine": [
+                {"name": "Personal Prayer (evening)", "category": "Spiritual", "points": 5},
+                {"name": "Reading (15 min)", "category": "Intellectual", "points": 10},
+                {"name": "Brush Teeth (evening)", "category": "Physical", "points": 2},
+            ],
+            "Personal Development": [
+                {"name": "Job Application", "category": "Intellectual", "points": 1, "trackable": True, "unit": "applications"},
+                {"name": "Independent Project (30 min)", "category": "Intellectual", "points": 10, "trackable": False},
+                {"name": "Piano", "category": "Intellectual", "points": 10, "trackable": False},
+            ],
+            "Negative Habits": [
+                {"name": "Phone Screen Time (per hour)", "category": "Spiritual", "points": -2.5, "trackable": True, "unit": "hours"},
+                {"name": "Phone Screen Time After Bed", "category": "Spiritual", "points": -5, "trackable": True, "unit": "hours"},
+                {"name": "18+ Content", "category": "Spiritual", "points": -10, "trackable": True, "unit": "events"},
+            ]
+        },
+        "running_log": {},
+        "running_goals": {
+            "weekly_mileage_target": 0,
+            "race_date": None,
+            "race_distance": 50.0,
+            "total_training_miles": 0
+        },
+        "time_logs": {},
+        "daily_metrics": {},
+        "goals": {"weekly": {}, "monthly": {}, "yearly": {}},
+        "total_points": 0,
+        "last_backup_date": None
+    }
+
     if DATA_FILE.exists():
-        with open(DATA_FILE, 'r') as f:
-            data = json.load(f)
-            # Add new fields if they don't exist
-            if "day_types" not in data:
-                data["day_types"] = {}
-            if "daily_checklists" not in data:
-                data["daily_checklists"] = {}
-            if "checklist_templates" not in data:
-                data["checklist_templates"] = {
-                    "Morning Routine": [
-                        {"name": "Scripture Study (15 min)", "category": "Spiritual", "points": 15},
-                        {"name": "Personal Prayer (morning)", "category": "Spiritual", "points": 5},
-                        {"name": "Brush Teeth (morning)", "category": "Physical", "points": 1},
-                        {"name": "Shower", "category": "Physical", "points": 3},
-                        {"name": "Make Bed", "category": "Other", "points": 5},
-                    ],
-                    "Evening Routine": [
-                        {"name": "Personal Prayer (evening)", "category": "Spiritual", "points": 5},
-                        {"name": "Reading (15 min)", "category": "Intellectual", "points": 10},
-                        {"name": "Brush Teeth (evening)", "category": "Physical", "points": 2},
-                    ]
-                }
+        try:
+            with open(DATA_FILE, 'r') as f:
+                data = json.load(f)
+
+            # Add missing fields from default data
+            for key, value in default_data.items():
+                if key not in data:
+                    data[key] = value
+
             return data
+
+        except json.JSONDecodeError:
+            st.error("⚠️ Data file is corrupted! Attempting to restore from backup...")
+
+            # Try to find most recent backup
+            if BACKUP_DIR.exists():
+                backups = sorted(BACKUP_DIR.glob("backup_*.json"), reverse=True)
+                for backup in backups:
+                    try:
+                        with open(backup, 'r') as f:
+                            data = json.load(f)
+                        st.success(f"✅ Restored from backup: {backup.name}")
+
+                        # Add missing fields
+                        for key, value in default_data.items():
+                            if key not in data:
+                                data[key] = value
+
+                        # Save the restored data
+                        save_data(data)
+                        return data
+                    except:
+                        continue
+
+            st.warning("⚠️ Could not restore from backup. Starting with fresh data.")
+            return default_data
+
+        except Exception as e:
+            st.error(f"⚠️ Error loading data: {str(e)}")
+            return default_data
     else:
-        return {
-            "daily_checklists": {},  # {date: {tasks: [], completed: [], quantities: {task_name: count}}}
-            "day_types": {},  # {date: "normal/travel/sabbath/sick/high_performance"}
-            "checklist_templates": {
-                "Morning Routine": [
-                        {"name": "Scripture Study (15 min)", "category": "Spiritual", "points": 15},
-                        {"name": "Personal Prayer (morning)", "category": "Spiritual", "points": 5},
-                        {"name": "Brush Teeth (morning)", "category": "Physical", "points": 1},
-                        {"name": "Shower", "category": "Physical", "points": 3},
-                        {"name": "Make Bed", "category": "Other", "points": 5},
-                    ],
-                "Evening Routine": [
-                        {"name": "Personal Prayer (evening)", "category": "Spiritual", "points": 5},
-                        {"name": "Reading (15 min)", "category": "Intellectual", "points": 10},
-                        {"name": "Brush Teeth (evening)", "category": "Physical", "points": 2},
-                    ],
-                "Personal Development": [
-                    {"name": "Job Application", "category": "Intellectual", "points": 1, "trackable": True, "unit": "applications"},
-                    {"name": "Independent Project (30 min)", "category": "Intellectual", "points": 10, "trackable": False},
-                    {"name": "Piano", "category": "Intellectual", "points": 10, "trackable": False},
-                ],
-                "Negative Habits": [
-                    {"name": "Phone Screen Time (per hour)", "category": "Spiritual", "points": -2.5, "trackable": True, "unit": "hours"},
-                    {"name": "Phone Screen Time After Bed", "category": "Spiritual", "points": -5, "trackable": True, "unit": "hours"},
-                    {"name": "18+ Content", "category": "Spiritual", "points": -10, "trackable": True, "unit": "events"},
-                ]
-            },
-            "running_log": {},
-            "running_goals": {
-                "weekly_mileage_target": 0,
-                "race_date": None,
-                "race_distance": 50.0,
-                "total_training_miles": 0
-            },
-            "time_logs": {},
-            "daily_metrics": {},
-            "goals": {"weekly": {}, "monthly": {}, "yearly": {}},
-            "total_points": 0
-        }
+        # First time - create new data file
+        return default_data
 
 def save_data(data):
-    with open(DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
+    try:
+        with open(DATA_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        st.error(f"Failed to save data: {str(e)}")
+        return False
+    return True
+
+def create_backup():
+    """Create a timestamped backup of the data file"""
+    try:
+        if not DATA_FILE.exists():
+            return False
+
+        # Create backup directory if it doesn't exist
+        BACKUP_DIR.mkdir(exist_ok=True)
+
+        # Create timestamped backup filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = BACKUP_DIR / f"backup_{timestamp}.json"
+
+        # Copy current data file to backup
+        shutil.copy2(DATA_FILE, backup_file)
+
+        # Keep only last 30 backups
+        backups = sorted(BACKUP_DIR.glob("backup_*.json"))
+        if len(backups) > 30:
+            for old_backup in backups[:-30]:
+                old_backup.unlink()
+
+        return True
+    except Exception as e:
+        st.error(f"Failed to create backup: {str(e)}")
+        return False
+
+def check_and_create_daily_backup(data):
+    """Create a backup once per day"""
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        # Check if we already backed up today
+        if "last_backup_date" not in data:
+            data["last_backup_date"] = None
+
+        if data["last_backup_date"] != today:
+            if create_backup():
+                data["last_backup_date"] = today
+                return True
+    except Exception:
+        pass
+    return False
+
+def export_data_for_download(data):
+    """Export data as downloadable JSON"""
+    try:
+        json_string = json.dumps(data, indent=2)
+        return json_string
+    except Exception as e:
+        st.error(f"Failed to export data: {str(e)}")
+        return None
+
+def import_data_from_file(uploaded_file):
+    """Import data from uploaded JSON file"""
+    try:
+        content = uploaded_file.read().decode('utf-8')
+        imported_data = json.loads(content)
+
+        # Basic validation - check for required keys
+        required_keys = ["daily_checklists", "checklist_templates"]
+        if not all(key in imported_data for key in required_keys):
+            st.error("Invalid backup file: missing required data fields")
+            return None
+
+        return imported_data
+    except json.JSONDecodeError:
+        st.error("Invalid JSON file")
+        return None
+    except Exception as e:
+        st.error(f"Failed to import data: {str(e)}")
+        return None
 
 # Load data
 data = load_data()
+
+# Create daily backup if needed
+check_and_create_daily_backup(data)
 
 # Helper functions
 def get_day_points(date_str, separate=False):
@@ -367,6 +473,42 @@ with st.sidebar:
                             save_data(data)
                             st.rerun()
     
+    # Backup & Export
+    with st.expander("💾 Backup & Export"):
+        st.write("**Export Data**")
+        if st.button("📥 Download Backup (JSON)", use_container_width=True):
+            json_string = export_data_for_download(data)
+            if json_string:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                st.download_button(
+                    label="⬇️ Download",
+                    data=json_string,
+                    file_name=f"lifetracker_backup_{timestamp}.json",
+                    mime="application/json"
+                )
+
+        if st.button("🔄 Create Manual Backup", use_container_width=True):
+            if create_backup():
+                st.success("✅ Backup created successfully!")
+            else:
+                st.error("❌ Failed to create backup")
+
+        st.divider()
+        st.write("**Import Data**")
+        uploaded_file = st.file_uploader("Upload backup JSON", type=['json'])
+        if uploaded_file is not None:
+            imported_data = import_data_from_file(uploaded_file)
+            if imported_data:
+                if st.button("⚠️ Replace Current Data", type="primary"):
+                    # Create backup before importing
+                    create_backup()
+                    data.clear()
+                    data.update(imported_data)
+                    save_data(data)
+                    st.success("✅ Data imported successfully!")
+                    st.rerun()
+                st.warning("This will replace all current data. A backup will be created first.")
+
     # LLM Export
     with st.expander("🤖 Export for LLM"):
         if st.button("Generate Export"):
@@ -376,9 +518,61 @@ with st.sidebar:
 st.title("📖 Dynamic Daily Activity Logger")
 st.markdown("*Flexible day-by-day tracking with custom checklists*")
 
-# Today's setup
-today = datetime.now(ZoneInfo("America/New_York")).date()
+# Date Navigation
+st.header("📅 Date Selection")
+
+# Initialize session state for selected date
+if "selected_date" not in st.session_state:
+    st.session_state.selected_date = datetime.now(ZoneInfo("America/New_York")).date()
+
+today_actual = datetime.now(ZoneInfo("America/New_York")).date()
+
+# Date navigation controls
+col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
+
+with col1:
+    if st.button("⏮️ -7 Days"):
+        st.session_state.selected_date = st.session_state.selected_date - timedelta(days=7)
+        st.rerun()
+
+with col2:
+    if st.button("◀️ Previous"):
+        st.session_state.selected_date = st.session_state.selected_date - timedelta(days=1)
+        st.rerun()
+
+with col3:
+    selected_date = st.date_input(
+        "Select Date",
+        value=st.session_state.selected_date,
+        max_value=today_actual,
+        key="date_picker"
+    )
+    if selected_date != st.session_state.selected_date:
+        st.session_state.selected_date = selected_date
+        st.rerun()
+
+with col4:
+    if st.button("▶️ Next"):
+        next_date = st.session_state.selected_date + timedelta(days=1)
+        if next_date <= today_actual:
+            st.session_state.selected_date = next_date
+            st.rerun()
+
+with col5:
+    if st.button("📍 Today"):
+        st.session_state.selected_date = today_actual
+        st.rerun()
+
+# Use selected date instead of today
+today = st.session_state.selected_date
 today_str = today.strftime("%Y-%m-%d")
+
+# Show if viewing past/future
+if today < today_actual:
+    days_ago = (today_actual - today).days
+    st.info(f"📆 Viewing {days_ago} day{'s' if days_ago > 1 else ''} ago")
+elif today > today_actual:
+    st.warning("⚠️ You're viewing a future date!")
 
 # Initialize today's data
 if today_str not in data["daily_checklists"]:
@@ -391,7 +585,8 @@ if today_str not in data["running_log"]:
     data["running_log"][today_str] = {"distance_miles": 0.0, "type": "easy", "notes": ""}
 
 # Day Type Selection
-st.header("🗓️ Today's Context")
+date_display = "Today" if today == today_actual else today.strftime("%A, %B %d, %Y")
+st.header(f"🗓️ {date_display}'s Context")
 col1, col2, col3 = st.columns([2, 1, 1])
 
 with col1:
@@ -425,7 +620,8 @@ with col3:
 st.divider()
 
 # Build Today's Checklist
-st.header("✅ Today's Checklist")
+checklist_header = "Today's Checklist" if today == today_actual else f"Checklist for {today.strftime('%b %d')}"
+st.header(f"✅ {checklist_header}")
 
 col1, col2 = st.columns([2, 1])
 
@@ -478,7 +674,8 @@ with col2:
 st.divider()
 
 # Display and check off tasks
-st.subheader("📝 Today's Tasks")
+tasks_header = "Today's Tasks" if today == today_actual else f"Tasks for {today.strftime('%b %d')}"
+st.subheader(f"📝 {tasks_header}")
 
 if not data["daily_checklists"][today_str]["tasks"]:
     st.info("👆 Add some tasks from templates above, or create a custom task")
@@ -581,23 +778,80 @@ else:
                         color = "green" if task["points"] > 0 else "red"
                         st.markdown(f":{color}[{adjusted_points:+.1f}]")
             
-            # Remove task buttons
+            # Task action buttons
             st.write("")
             for task in tasks:
-                if st.button(f"🗑️ {task['name'][:20]}...", key=f"remove_{today_str}_{task['name']}"):
-                    data["daily_checklists"][today_str]["tasks"] = [
-                        t for t in data["daily_checklists"][today_str]["tasks"] 
-                        if t["name"] != task["name"]
-                    ]
-                    if task["name"] in data["daily_checklists"][today_str]["completed"]:
-                        data["daily_checklists"][today_str]["completed"].remove(task["name"])
-                    save_data(data)
-                    st.rerun()
+                btn_col1, btn_col2, btn_col3 = st.columns([2, 2, 2])
+
+                with btn_col1:
+                    # Edit points
+                    with st.popover(f"✏️ Edit", use_container_width=True):
+                        st.write(f"**{task['name'][:25]}**")
+                        new_points = st.number_input(
+                            "Points",
+                            min_value=-50,
+                            max_value=50,
+                            value=task["points"],
+                            key=f"edit_pts_{today_str}_{task['name']}"
+                        )
+                        if st.button("💾 Save", key=f"save_pts_{today_str}_{task['name']}"):
+                            for t in data["daily_checklists"][today_str]["tasks"]:
+                                if t["name"] == task["name"]:
+                                    t["points"] = new_points
+                                    break
+                            save_data(data)
+                            st.rerun()
+
+                with btn_col2:
+                    # Save to template
+                    with st.popover(f"📋 Save", use_container_width=True):
+                        st.write(f"**Save to Template**")
+                        st.caption(task['name'][:30])
+                        template_list = list(data["checklist_templates"].keys())
+                        template_list.append("+ New Template")
+
+                        selected_template = st.selectbox(
+                            "Template",
+                            template_list,
+                            key=f"tmpl_{today_str}_{task['name']}"
+                        )
+
+                        if selected_template == "+ New Template":
+                            new_template_name = st.text_input("Template Name", key=f"new_tmpl_{today_str}_{task['name']}")
+                            if st.button("Create & Add", key=f"create_tmpl_{today_str}_{task['name']}") and new_template_name:
+                                data["checklist_templates"][new_template_name] = [task.copy()]
+                                save_data(data)
+                                st.success("✅ Template created!")
+                                st.rerun()
+                        else:
+                            if st.button("Add to Template", key=f"add_tmpl_{today_str}_{task['name']}"):
+                                # Check if task already exists
+                                task_names = [t["name"] for t in data["checklist_templates"][selected_template]]
+                                if task["name"] not in task_names:
+                                    data["checklist_templates"][selected_template].append(task.copy())
+                                    save_data(data)
+                                    st.success("✅ Added to template!")
+                                    st.rerun()
+                                else:
+                                    st.warning("Task already in template")
+
+                with btn_col3:
+                    # Delete task
+                    if st.button(f"🗑️ Delete", key=f"remove_{today_str}_{task['name']}", use_container_width=True):
+                        data["daily_checklists"][today_str]["tasks"] = [
+                            t for t in data["daily_checklists"][today_str]["tasks"]
+                            if t["name"] != task["name"]
+                        ]
+                        if task["name"] in data["daily_checklists"][today_str]["completed"]:
+                            data["daily_checklists"][today_str]["completed"].remove(task["name"])
+                        save_data(data)
+                        st.rerun()
 
 st.divider()
 
 # Today's Summary
-st.subheader("📊 Today's Summary")
+summary_header = "Today's Summary" if today == today_actual else f"Summary for {today.strftime('%b %d')}"
+st.subheader(f"📊 {summary_header}")
 
 positive_pts, negative_pts = get_day_points(today_str, separate=True)
 net_pts = positive_pts + negative_pts
@@ -810,42 +1064,74 @@ with tab3:
 
 with tab4:
     st.header("📅 History")
-    
+
     # Show past days with their checklists
-    for i in range(1, 8):  # Last 7 days
-        check_date = today - timedelta(days=i)
+    for i in range(1, 15):  # Last 14 days (increased from 7)
+        check_date = today_actual - timedelta(days=i)
         date_str = check_date.strftime("%Y-%m-%d")
-        
+
         if date_str in data["daily_checklists"] and data["daily_checklists"][date_str]["tasks"]:
             with st.expander(f"{check_date.strftime('%A, %B %d')} - {data['day_types'].get(date_str, 'normal')}"):
                 pos, neg = get_day_points(date_str, separate=True)
-                
-                col1, col2, col3 = st.columns(3)
+
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric("Positive", f"+{pos:.1f}")
                 with col2:
                     st.metric("Negative", f"{neg:.1f}")
                 with col3:
                     st.metric("Net", f"{pos+neg:+.1f}")
-                
+                with col4:
+                    # Quick action to copy all tasks to today
+                    if st.button("📋 Copy All to Today", key=f"copy_all_{date_str}"):
+                        today_str_actual = today_actual.strftime("%Y-%m-%d")
+                        if today_str_actual not in data["daily_checklists"]:
+                            data["daily_checklists"][today_str_actual] = {"tasks": [], "completed": [], "quantities": {}}
+
+                        existing_names = {t["name"] for t in data["daily_checklists"][today_str_actual]["tasks"]}
+                        tasks_to_copy = data["daily_checklists"][date_str]["tasks"]
+
+                        for task in tasks_to_copy:
+                            if task["name"] not in existing_names:
+                                data["daily_checklists"][today_str_actual]["tasks"].append(task.copy())
+
+                        save_data(data)
+                        st.success(f"✅ Copied {len(tasks_to_copy)} tasks to today!")
+                        st.rerun()
+
                 completed = data["daily_checklists"][date_str].get("completed", [])
                 tasks = data["daily_checklists"][date_str]["tasks"]
                 quantities = data["daily_checklists"][date_str].get("quantities", {})
-                
+
                 st.write("**Completed:**")
                 for task in tasks:
                     if task["name"] in completed:
                         points = task["points"]
                         display_text = f"✅ {task['name']}"
-                        
+
                         if task.get("trackable", False):
                             quantity = quantities.get(task["name"], 1)
                             points = points * quantity
                             display_text += f" (×{quantity:.1f})"
-                        
+
                         display_text += f" ({points:+.1f}pts)"
-                        st.write(display_text)
-                
+
+                        # Add button to copy individual task to today
+                        task_col1, task_col2 = st.columns([4, 1])
+                        with task_col1:
+                            st.write(display_text)
+                        with task_col2:
+                            if st.button("📋", key=f"copy_{date_str}_{task['name']}", help="Copy to today"):
+                                today_str_actual = today_actual.strftime("%Y-%m-%d")
+                                if today_str_actual not in data["daily_checklists"]:
+                                    data["daily_checklists"][today_str_actual] = {"tasks": [], "completed": [], "quantities": {}}
+
+                                existing_names = {t["name"] for t in data["daily_checklists"][today_str_actual]["tasks"]}
+                                if task["name"] not in existing_names:
+                                    data["daily_checklists"][today_str_actual]["tasks"].append(task.copy())
+                                    save_data(data)
+                                    st.rerun()
+
                 st.write("**Not Completed:**")
                 for task in tasks:
                     if task["name"] not in completed:

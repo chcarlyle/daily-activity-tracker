@@ -1,18 +1,17 @@
 # Daily Activity Tracker
 
-A personal activity tracking app with dynamic checklists, day types, and analytics.
+A personal life tracking app built with Streamlit for monitoring daily habits, tasks, and goals.
 
 ## Features
 
-- ✅ **Dynamic Daily Checklists** - Create custom tasks each day
-- 📅 **Day Types** - Normal, School, Sabbath, Sick, High Performance
-- 📊 **Analytics** - Track positive vs negative points over time
-- 📱 **Mobile-Friendly** - Works great on iPhone/iPad
-- 🔒 **Private** - Your data stays with you
+- Dynamic daily checklists with customizable templates
+- Point-based tracking system with day-type modifiers
+- Automatic daily backups with recovery
+- Date navigation to view/edit historical data
+- Running tracker
+- Habit analytics and visualization
 
-## Deployment
-
-This app is deployed on Streamlit Cloud and can be accessed from any device.
+## Quick Start
 
 ### Local Development
 
@@ -20,23 +19,40 @@ This app is deployed on Streamlit Cloud and can be accessed from any device.
 # Install dependencies
 pip install -r requirements.txt
 
-# Run locally
+# Run the app
 streamlit run dynamic_activity_logger_2026.py
 ```
 
-## Usage
+### Deployment on Streamlit Cloud
 
-1. **Select Day Type** - Choose what kind of day it is
-2. **Build Checklist** - Add tasks from templates or create custom ones
-3. **Check Off Tasks** - Mark tasks complete as you do them
-4. **Track Progress** - View analytics and trends
+1. Push this repository to GitHub
+2. Go to [share.streamlit.io](https://share.streamlit.io)
+3. Deploy from your GitHub repository
+4. In the Streamlit Cloud dashboard, add your secrets:
+   - Go to App Settings → Secrets
+   - Add the following:
+   ```toml
+   [passwords]
+   app_password = "your_password_here"
+   ```
 
-## Privacy
+## File Structure
 
-- All data is stored in JSON format
-- Runs entirely in Streamlit Cloud
-- Private GitHub repository
+- `dynamic_activity_logger_2026.py` - Main application
+- `requirements.txt` - Python dependencies
+- `IMPROVEMENTS.md` - Recent improvements documentation
+- `.streamlit/secrets.toml` - Local secrets (NOT committed to git)
 
-## License
+## Configuration
 
-Personal use only
+The app uses timezone `America/New_York` by default. To change this, edit the timezone references in the main Python file.
+
+## Data Storage
+
+- Data is stored in `dynamic_activity_log_2026.json` (auto-created, not committed to git)
+- Automatic daily backups saved to `backups/` folder
+- Export/import functionality available in the sidebar
+
+## Privacy Note
+
+This is a personal tracking app. The `.gitignore` file is configured to prevent your personal data and secrets from being committed to the repository.
