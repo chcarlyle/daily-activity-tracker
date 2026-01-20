@@ -1,16 +1,11 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import json
 from pathlib import Path
-from scipy import stats
-from sklearn.linear_model import LinearRegression
 import shutil
-import base64
 
 # Page config - must be first Streamlit command
 st.set_page_config(
@@ -137,51 +132,11 @@ if not check_password():
 DATA_FILE = Path("dynamic_activity_log_2026.json")
 BACKUP_DIR = Path("backups")
 
-# Day type configurations
-DAY_TYPE_CONFIG = {
-    "normal": {
-        "name": "Normal Day",
-        "description": "Regular day with full expectations",
-        "point_multiplier": 1.0,
-        "negative_tolerance": 1.0,
-        "color": "#4CAF50"
-    },
-    "travel": {
-        "name": "School Day",
-        "description": "Classes - increase overall focus",
-        "point_multiplier": 1.25,
-        "negative_tolerance": 0.75,  # Negatives count more
-        "color": "#2196F3"
-    },
-    "sabbath": {
-        "name": "Sabbath",
-        "description": "Sunday - rest and worship focus",
-        "point_multiplier": 1.0,
-        "negative_tolerance": 0.5,  # Stricter on negatives
-        "color": "#FFD700"
-    },
-    "sick": {
-        "name": "Sick Day",
-        "description": "Not feeling well - minimal expectations",
-        "point_multiplier": 0.3,
-        "negative_tolerance": 5.0,  # Very lenient
-        "color": "#FF9800"
-    },
-    "high_performance": {
-        "name": "High Performance",
-        "description": "Going all out - maximum effort day",
-        "point_multiplier": 1.5,
-        "negative_tolerance": 0.5,
-        "color": "#9C27B0"
-    }
-}
-
 # Initialize data structure
 def load_data():
     """Load data with error handling and automatic recovery"""
     default_data = {
         "daily_checklists": {},  # {date: {tasks: [], completed: [], quantities: {task_name: count}}}
-        "day_types": {},  # {date: "normal/travel/sabbath/sick/high_performance"}
         "checklist_templates": {
             "Morning Routine": [
                 {"name": "Scripture Study (15 min)", "category": "Spiritual", "points": 15},
@@ -205,13 +160,6 @@ def load_data():
                 {"name": "Phone Screen Time After Bed", "category": "Spiritual", "points": -5, "trackable": True, "unit": "hours"},
                 {"name": "18+ Content", "category": "Spiritual", "points": -10, "trackable": True, "unit": "events"},
             ]
-        },
-        "running_log": {},
-        "running_goals": {
-            "weekly_mileage_target": 0,
-            "race_date": None,
-            "race_distance": 50.0,
-            "total_training_miles": 0
         },
         "time_logs": {},
         "daily_metrics": {},
@@ -358,31 +306,28 @@ def get_day_points(date_str, separate=False):
     """Calculate points for a day, optionally separating positive and negative"""
     if date_str not in data["daily_checklists"]:
         return (0, 0) if separate else 0
-    
-    day_type = data["day_types"].get(date_str, "normal")
-    config = DAY_TYPE_CONFIG[day_type]
-    
+
     completed = data["daily_checklists"][date_str].get("completed", [])
     tasks = data["daily_checklists"][date_str].get("tasks", [])
     quantities = data["daily_checklists"][date_str].get("quantities", {})
-    
+
     positive = 0
     negative = 0
-    
+
     for task in tasks:
         if task["name"] in completed:
             points = task["points"]
-            
+
             # Check if this task is trackable (has a multiplier)
             if task.get("trackable", False):
                 quantity = quantities.get(task["name"], 1)
                 points = points * quantity
-            
+
             if points > 0:
-                positive += points * config["point_multiplier"]
+                positive += points
             else:
-                negative += points / config["negative_tolerance"]
-    
+                negative += points
+
     if separate:
         return (positive, negative)
     return positive + negative
@@ -576,41 +521,22 @@ elif today > today_actual:
 # Initialize today's data
 if today_str not in data["daily_checklists"]:
     data["daily_checklists"][today_str] = {"tasks": [], "completed": [], "quantities": {}}
-if today_str not in data["day_types"]:
-    data["day_types"][today_str] = "normal"
 if today_str not in data["daily_metrics"]:
     data["daily_metrics"][today_str] = {"mood": 5, "energy": 5, "notes": ""}
-if today_str not in data["running_log"]:
-    data["running_log"][today_str] = {"distance_miles": 0.0, "type": "easy", "notes": ""}
 
-# Day Type Selection
+# Day Context
 date_display = "Today" if today == today_actual else today.strftime("%A, %B %d, %Y")
-st.header(f"🗓️ {date_display}'s Context")
-col1, col2, col3 = st.columns([2, 1, 1])
+st.header(f"🗓️ {date_display}")
+
+col1, col2 = st.columns(2)
 
 with col1:
-    day_type = st.selectbox(
-        "What kind of day is today?",
-        list(DAY_TYPE_CONFIG.keys()),
-        format_func=lambda x: f"{DAY_TYPE_CONFIG[x]['name']} - {DAY_TYPE_CONFIG[x]['description']}",
-        index=list(DAY_TYPE_CONFIG.keys()).index(data["day_types"][today_str])
-    )
-    
-    if day_type != data["day_types"][today_str]:
-        data["day_types"][today_str] = day_type
-        save_data(data)
-        st.rerun()
-    
-    config = DAY_TYPE_CONFIG[day_type]
-    st.info(f"📊 Point Multiplier: {config['point_multiplier']}x | Negative Tolerance: {1/config['negative_tolerance']:.0%} impact")
-
-with col2:
     mood_val = st.slider("😊 Mood", 1, 10, value=data["daily_metrics"][today_str].get("mood", 5))
     if mood_val != data["daily_metrics"][today_str].get("mood"):
         data["daily_metrics"][today_str]["mood"] = mood_val
         save_data(data)
 
-with col3:
+with col2:
     energy_val = st.slider("⚡ Energy", 1, 10, value=data["daily_metrics"][today_str].get("energy", 5))
     if energy_val != data["daily_metrics"][today_str].get("energy"):
         data["daily_metrics"][today_str]["energy"] = energy_val
@@ -703,17 +629,13 @@ else:
                 # Get quantity if trackable
                 quantity = data["daily_checklists"][today_str].get("quantities", {}).get(task["name"], 1)
                 
-                # Calculate adjusted points
+                # Calculate points
                 base_points = task["points"]
                 if task.get("trackable", False):
                     base_points = base_points * quantity
-                
+
                 adjusted_points = base_points
-                if base_points > 0:
-                    adjusted_points *= config["point_multiplier"]
-                else:
-                    adjusted_points /= config["negative_tolerance"]
-                
+
                 # Display task
                 if task.get("trackable", False):
                     # Trackable task - show quantity input
@@ -872,196 +794,299 @@ with col4:
 st.divider()
 
 # Visualizations
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📈 Positive vs Negative",
-    "🗓️ Day Type Patterns",
-    "🏃 Running Tracker",
+tab1, tab2, tab3 = st.tabs([
+    "📈 Trends & Insights",
+    "📊 Category Balance",
     "📅 History"
 ])
 
 with tab1:
-    st.header("Positive vs Negative Tracking")
-    st.caption("See your good habits and bad habits side by side")
-    
+    st.header("Trends & Insights")
+    st.caption("Track your progress and discover patterns")
+
     # Last 30 days
     chart_data = []
     for i in range(30):
-        check_date = today - timedelta(days=29-i)
+        check_date = today_actual - timedelta(days=29-i)
         date_str = check_date.strftime("%Y-%m-%d")
-        
+
         pos, neg = get_day_points(date_str, separate=True)
-        
+
+        # Get mood and energy if available
+        mood = data["daily_metrics"].get(date_str, {}).get("mood", None)
+        energy = data["daily_metrics"].get(date_str, {}).get("energy", None)
+
         chart_data.append({
             "Date": check_date,
             "Positive": pos,
-            "Negative": abs(neg),  # Make positive for visualization
-            "Net": pos + neg
+            "Negative": abs(neg),
+            "Net": pos + neg,
+            "Mood": mood,
+            "Energy": energy
         })
-    
+
     df_chart = pd.DataFrame(chart_data)
-    
-    # Stacked bar chart
-    st.subheader("Daily Positive vs Negative Points")
-    
+
+    # Net points trend with 7-day moving average
+    st.subheader("Net Points Trend")
+
+    df_chart['7-Day Avg'] = df_chart['Net'].rolling(window=7, min_periods=1).mean()
+
     fig = go.Figure()
-    
+
+    fig.add_trace(go.Scatter(
+        x=df_chart['Date'],
+        y=df_chart['Net'],
+        mode='markers+lines',
+        name='Daily Net Points',
+        line=dict(color='lightblue', width=1),
+        marker=dict(size=6)
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=df_chart['Date'],
+        y=df_chart['7-Day Avg'],
+        mode='lines',
+        name='7-Day Average',
+        line=dict(color='blue', width=3)
+    ))
+
+    fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
+
+    fig.update_layout(
+        title='Net Points Over Time (30 Days)',
+        xaxis_title='Date',
+        yaxis_title='Points',
+        hovermode='x unified'
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Positive vs Negative
+    st.subheader("Positive vs Negative Points")
+
+    fig = go.Figure()
+
     fig.add_trace(go.Bar(
         x=df_chart['Date'],
         y=df_chart['Positive'],
         name='Positive Points',
         marker_color='lightgreen'
     ))
-    
+
     fig.add_trace(go.Bar(
         x=df_chart['Date'],
         y=df_chart['Negative'],
         name='Negative Points',
         marker_color='lightcoral'
     ))
-    
+
     fig.update_layout(
         barmode='group',
-        title='Positive vs Negative Points (Last 30 Days)',
         xaxis_title='Date',
         yaxis_title='Points',
         hovermode='x unified'
     )
-    
+
     st.plotly_chart(fig, use_container_width=True)
-    
-    # Net points trend
-    st.subheader("Net Points Trend")
-    
-    fig = px.line(df_chart, x='Date', y='Net',
-                  title='Net Points Over Time',
-                  markers=True)
-    fig.add_hline(y=0, line_dash="dash", line_color="gray")
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Summary stats
-    st.subheader("30-Day Summary")
+
+    # Weekly comparison
+    st.subheader("Weekly Comparison")
+
+    # Calculate weekly totals
+    df_chart['Week'] = df_chart['Date'].apply(lambda x: f"Week of {get_week_start(x).strftime('%b %d')}")
+    weekly_data = df_chart.groupby('Week').agg({
+        'Net': 'sum',
+        'Positive': 'sum',
+        'Negative': 'sum'
+    }).reset_index()
+
     col1, col2, col3 = st.columns(3)
-    
     with col1:
-        avg_positive = df_chart['Positive'].mean()
-        st.metric("Avg Positive/Day", f"+{avg_positive:.1f}")
+        if len(weekly_data) > 0:
+            st.metric("This Week", f"{weekly_data.iloc[-1]['Net']:+.1f} pts")
     with col2:
-        avg_negative = df_chart['Negative'].mean()
-        st.metric("Avg Negative/Day", f"-{avg_negative:.1f}")
+        if len(weekly_data) > 1:
+            last_week = weekly_data.iloc[-2]['Net']
+            st.metric("Last Week", f"{last_week:+.1f} pts")
     with col3:
-        ratio = avg_positive / avg_negative if avg_negative > 0 else 0
-        st.metric("Positive:Negative Ratio", f"{ratio:.1f}:1")
+        if len(weekly_data) > 1:
+            change = weekly_data.iloc[-1]['Net'] - weekly_data.iloc[-2]['Net']
+            st.metric("Week-over-Week", f"{change:+.1f} pts", delta=f"{change:+.1f}")
+
+    # Insights
+    st.subheader("📊 Insights")
+
+    insights = []
+
+    # Calculate streaks
+    positive_days = (df_chart['Net'] > 0).sum()
+    total_days = len(df_chart[df_chart['Net'] != 0])
+
+    if total_days > 0:
+        positive_rate = (positive_days / total_days) * 100
+        insights.append(f"✅ You've had positive net points on **{positive_rate:.0f}%** of logged days")
+
+    # Mood correlation
+    df_with_mood = df_chart.dropna(subset=['Mood', 'Net'])
+    if len(df_with_mood) > 5:
+        correlation = df_with_mood['Mood'].corr(df_with_mood['Net'])
+        if correlation > 0.3:
+            insights.append(f"😊 Your mood tends to be **higher** on days with more points (correlation: {correlation:.2f})")
+        elif correlation < -0.3:
+            insights.append(f"🤔 Interestingly, your mood shows a **negative** correlation with points ({correlation:.2f})")
+
+    # Energy correlation
+    df_with_energy = df_chart.dropna(subset=['Energy', 'Net'])
+    if len(df_with_energy) > 5:
+        correlation = df_with_energy['Energy'].corr(df_with_energy['Net'])
+        if correlation > 0.3:
+            insights.append(f"⚡ Higher energy correlates with better performance (correlation: {correlation:.2f})")
+
+    # Trend detection
+    if len(df_chart) >= 14:
+        recent_avg = df_chart.tail(7)['Net'].mean()
+        older_avg = df_chart.iloc[-14:-7]['Net'].mean()
+        if recent_avg > older_avg * 1.2:
+            insights.append(f"📈 You're on an **upward trend** - last 7 days averaging {recent_avg:.1f} vs {older_avg:.1f} the week before!")
+        elif recent_avg < older_avg * 0.8:
+            insights.append(f"📉 Recent dip detected - last 7 days averaging {recent_avg:.1f} vs {older_avg:.1f} the week before")
+
+    # Best/worst days
+    if len(df_chart[df_chart['Net'] != 0]) > 0:
+        best_day = df_chart.loc[df_chart['Net'].idxmax()]
+        worst_day = df_chart.loc[df_chart['Net'].idxmin()]
+        insights.append(f"⭐ Best day: **{best_day['Date'].strftime('%b %d')}** ({best_day['Net']:+.1f} pts)")
+        insights.append(f"⬇️ Lowest day: **{worst_day['Date'].strftime('%b %d')}** ({worst_day['Net']:+.1f} pts)")
+
+    for insight in insights:
+        st.markdown(f"- {insight}")
 
 with tab2:
-    st.header("Day Type Analysis")
-    st.caption("How different day types affect your performance")
-    
-    # Calculate stats by day type
-    day_type_stats = {}
-    for date_str, day_type in data["day_types"].items():
-        if day_type not in day_type_stats:
-            day_type_stats[day_type] = {"positive": [], "negative": [], "net": []}
-        
-        pos, neg = get_day_points(date_str, separate=True)
-        day_type_stats[day_type]["positive"].append(pos)
-        day_type_stats[day_type]["negative"].append(abs(neg))
-        day_type_stats[day_type]["net"].append(pos + neg)
-    
-    # Create summary DataFrame
-    summary_data = []
-    for day_type, stats in day_type_stats.items():
-        if stats["positive"]:
-            summary_data.append({
-                "Day Type": DAY_TYPE_CONFIG[day_type]["name"],
-                "Count": len(stats["positive"]),
-                "Avg Positive": np.mean(stats["positive"]),
-                "Avg Negative": np.mean(stats["negative"]),
-                "Avg Net": np.mean(stats["net"])
+    st.header("Category Balance")
+    st.caption("See how you're doing across different life areas")
+
+    # Calculate category stats for last 30 days
+    categories = ["Spiritual", "Social", "Physical", "Intellectual", "Other"]
+    category_data = {cat: [] for cat in categories}
+
+    for i in range(30):
+        check_date = today_actual - timedelta(days=29-i)
+        date_str = check_date.strftime("%Y-%m-%d")
+
+        for category in categories:
+            points = get_category_points(date_str, category)
+            category_data[category].append({
+                "Date": check_date,
+                "Points": points
             })
-    
-    if summary_data:
-        df_summary = pd.DataFrame(summary_data)
-        
-        st.dataframe(df_summary, use_container_width=True, hide_index=True)
-        
-        # Visualization
-        fig = go.Figure()
-        
-        fig.add_trace(go.Bar(
-            x=df_summary['Day Type'],
-            y=df_summary['Avg Positive'],
-            name='Avg Positive',
-            marker_color='lightgreen'
-        ))
-        
-        fig.add_trace(go.Bar(
-            x=df_summary['Day Type'],
-            y=df_summary['Avg Negative'],
-            name='Avg Negative',
-            marker_color='lightcoral'
-        ))
-        
-        fig.update_layout(
-            barmode='group',
-            title='Average Points by Day Type',
-            xaxis_title='Day Type',
-            yaxis_title='Average Points'
+
+    # Total points by category
+    st.subheader("Total Points by Category (30 Days)")
+
+    category_totals = []
+    for category in categories:
+        total = sum(d["Points"] for d in category_data[category])
+        avg = total / 30
+        category_totals.append({
+            "Category": category,
+            "Total": total,
+            "Average/Day": avg
+        })
+
+    df_totals = pd.DataFrame(category_totals)
+
+    fig = go.Figure(data=[
+        go.Bar(
+            x=df_totals['Category'],
+            y=df_totals['Total'],
+            marker_color=['#9C27B0', '#2196F3', '#4CAF50', '#FF9800', '#607D8B'],
+            text=df_totals['Total'].round(1),
+            textposition='outside'
         )
-        
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Track more days to see day type patterns")
+    ])
+
+    fig.update_layout(
+        xaxis_title='Category',
+        yaxis_title='Total Points',
+        showlegend=False
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Category breakdown table
+    st.dataframe(df_totals, use_container_width=True, hide_index=True)
+
+    # Category trends over time
+    st.subheader("Category Trends")
+
+    # Create line chart for each category
+    trend_data = []
+    for category in categories:
+        for day_data in category_data[category]:
+            trend_data.append({
+                "Date": day_data["Date"],
+                "Category": category,
+                "Points": day_data["Points"]
+            })
+
+    df_trends = pd.DataFrame(trend_data)
+
+    fig = go.Figure()
+
+    colors = {'Spiritual': '#9C27B0', 'Social': '#2196F3', 'Physical': '#4CAF50',
+              'Intellectual': '#FF9800', 'Other': '#607D8B'}
+
+    for category in categories:
+        cat_data = df_trends[df_trends['Category'] == category]
+        fig.add_trace(go.Scatter(
+            x=cat_data['Date'],
+            y=cat_data['Points'],
+            mode='lines',
+            name=category,
+            line=dict(color=colors[category], width=2)
+        ))
+
+    fig.update_layout(
+        xaxis_title='Date',
+        yaxis_title='Points',
+        hovermode='x unified'
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Balance insights
+    st.subheader("⚖️ Balance Insights")
+
+    balance_insights = []
+
+    # Find strongest and weakest categories
+    strongest = df_totals.loc[df_totals['Total'].idxmax()]
+    weakest = df_totals.loc[df_totals['Total'].idxmin()]
+
+    if strongest['Total'] > 0:
+        balance_insights.append(f"💪 **{strongest['Category']}** is your strongest area with {strongest['Total']:.1f} total points")
+
+    if weakest['Total'] < strongest['Total'] * 0.3:
+        balance_insights.append(f"⚠️ **{weakest['Category']}** needs attention - only {weakest['Total']:.1f} points vs {strongest['Total']:.1f} in {strongest['Category']}")
+
+    # Check for balance
+    std_dev = df_totals['Total'].std()
+    mean_val = df_totals['Total'].mean()
+    if mean_val > 0 and std_dev / mean_val < 0.5:
+        balance_insights.append("✅ Good balance across categories!")
+    elif mean_val > 0:
+        balance_insights.append("📊 Your focus is concentrated in a few areas - consider broadening")
+
+    # Category-specific insights
+    for _, row in df_totals.iterrows():
+        if row['Average/Day'] < 1 and row['Total'] > 0:
+            balance_insights.append(f"💡 Tip: You're averaging less than 1 point/day in **{row['Category']}**")
+
+    for insight in balance_insights:
+        st.markdown(f"- {insight}")
 
 with tab3:
-    st.header("🏃 Running Tracker")
-    
-    # Running tracker UI (simplified version from before)
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        distance = st.number_input(
-            "Today's Distance (miles)",
-            min_value=0.0,
-            max_value=50.0,
-            value=float(data["running_log"][today_str].get("distance_miles", 0.0)),
-            step=0.1,
-            format="%.1f"
-        )
-        
-        if distance != data["running_log"][today_str].get("distance_miles"):
-            data["running_log"][today_str]["distance_miles"] = distance
-            save_data(data)
-    
-    with col2:
-        run_type = st.selectbox(
-            "Run Type",
-            ["easy", "long_run", "tempo", "intervals", "recovery", "race"],
-            index=["easy", "long_run", "tempo", "intervals", "recovery", "race"].index(
-                data["running_log"][today_str].get("type", "easy")
-            )
-        )
-        
-        if run_type != data["running_log"][today_str].get("type"):
-            data["running_log"][today_str]["type"] = run_type
-            save_data(data)
-    
-    # Weekly mileage
-    week_start = get_week_start(today)
-    weekly_miles = 0
-    
-    for i in range(7):
-        check_date = week_start + timedelta(days=i)
-        date_str = check_date.strftime("%Y-%m-%d")
-        if date_str in data["running_log"]:
-            weekly_miles += data["running_log"][date_str].get("distance_miles", 0)
-    
-    st.metric("This Week's Mileage", f"{weekly_miles:.1f} miles")
-    
-    # Cumulative
-    total_miles = sum(run.get("distance_miles", 0) for run in data["running_log"].values())
-    st.metric("Total Training Miles", f"{total_miles:.1f} miles")
-
-with tab4:
     st.header("📅 History")
 
     # Show past days with their checklists
@@ -1070,7 +1095,7 @@ with tab4:
         date_str = check_date.strftime("%Y-%m-%d")
 
         if date_str in data["daily_checklists"] and data["daily_checklists"][date_str]["tasks"]:
-            with st.expander(f"{check_date.strftime('%A, %B %d')} - {data['day_types'].get(date_str, 'normal')}"):
+            with st.expander(f"{check_date.strftime('%A, %B %d')}"):
                 pos, neg = get_day_points(date_str, separate=True)
 
                 col1, col2, col3, col4 = st.columns(4)
@@ -1138,4 +1163,4 @@ with tab4:
 
 # Footer
 st.divider()
-st.markdown("**💡 Tip:** Different day types = different expectations. Travel days with high screen time won't hurt as much!")
+st.markdown("**💡 Tip:** Check the Trends & Insights tab to discover patterns and track your progress over time!")

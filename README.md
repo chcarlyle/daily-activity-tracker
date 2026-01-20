@@ -4,12 +4,16 @@ A personal life tracking app built with Streamlit for monitoring daily habits, t
 
 ## Features
 
-- Dynamic daily checklists with customizable templates
-- Point-based tracking system with day-type modifiers
-- Automatic daily backups with recovery
-- Date navigation to view/edit historical data
-- Running tracker
-- Habit analytics and visualization
+- **Dynamic daily checklists** with customizable templates
+- **Point-based tracking system** - track positive habits and negative ones
+- **Automatic daily backups** with recovery and import/export
+- **Date navigation** - view/edit any past date or plan ahead
+- **Advanced analytics**:
+  - Trends & insights with 7-day moving averages
+  - Category balance across life areas (Spiritual, Social, Physical, Intellectual, Other)
+  - Smart pattern detection (mood/energy correlations, upward/downward trends)
+- **Task quick actions** - edit points, save to templates, copy from history
+- **Mood & Energy tracking** - correlate with performance
 
 ## Quick Start
 

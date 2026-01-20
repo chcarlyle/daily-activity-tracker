@@ -1,6 +1,22 @@
 # LifeTracker Improvements
 
-## Recent Enhancements
+## Latest Changes (v2.0)
+
+### Simplification & Enhanced Analytics
+- **Removed day types system** - No more complex point multipliers or negative tolerance calculations
+- **Removed running tracker** - Simplified focus on daily habits and tasks
+- **Added Trends & Insights tab** with:
+  - 7-day moving average trend analysis
+  - Weekly comparison metrics
+  - Smart insights (mood/energy correlations, trend detection, best/worst days)
+  - Positive day percentage tracking
+- **Added Category Balance tab** with:
+  - Total points breakdown by life area
+  - Category trends over time
+  - Balance insights and recommendations
+  - Visual analytics with color-coded charts
+
+## Recent Enhancements (v1.0)
 
 ### 1. Data Backup & Recovery
 - **Automatic Daily Backups**: Creates a timestamped backup once per day automatically
