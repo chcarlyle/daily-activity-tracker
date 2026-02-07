@@ -27,8 +27,17 @@ from database.templates import (
 )
 from database.metrics import save_daily_metric, get_daily_metric, get_metrics_in_range
 from database.goals import save_goal, get_goals_by_type, delete_goal
-from database.avatars import save_avatar, get_active_avatar, delete_avatar, get_alignment_history
+from database.avatars import save_avatar, get_active_avatar, delete_avatar
 from database.migrations import migrate_json_to_database, export_database_to_json
+from analytics.calculations import (
+    get_day_points, get_task_streak, get_positive_day_streak,
+    get_task_consistency, get_all_unique_tasks
+)
+from services.avatar_service import prepare_avatar_analysis_data, generate_avatar_prompt
+from services.backup_service import (
+    create_backup, check_and_create_daily_backup,
+    export_data_for_download, import_data_from_file
+)
 
 # Page config - must be first Streamlit command
 st.set_page_config(
@@ -190,384 +199,11 @@ def save_data(data):
         return False
     return True
 
-def create_backup():
-    """Create a timestamped backup of the database file"""
-    try:
-        if not DB_FILE.exists():
-            return False
-
-        # Create backup directory if it doesn't exist
-        BACKUP_DIR.mkdir(exist_ok=True)
-
-        # Create timestamped backup filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_file = BACKUP_DIR / f"backup_{timestamp}.db"
-
-        # Copy current database file to backup
-        shutil.copy2(DB_FILE, backup_file)
-
-        # Keep only last 30 backups
-        backups = sorted(BACKUP_DIR.glob("backup_*.db"))
-        if len(backups) > 30:
-            for old_backup in backups[:-30]:
-                old_backup.unlink()
-
-        return True
-    except Exception as e:
-        st.error(f"Failed to create backup: {str(e)}")
-        return False
-
-def check_and_create_daily_backup(data):
-    """Create a backup once per day"""
-    try:
-        today = datetime.now().strftime("%Y-%m-%d")
-
-        # Check if we already backed up today
-        if "last_backup_date" not in data:
-            data["last_backup_date"] = None
-
-        if data["last_backup_date"] != today:
-            if create_backup():
-                data["last_backup_date"] = today
-                return True
-    except Exception:
-        pass
-    return False
-
-def export_data_for_download(data):
-    """Export data as downloadable JSON"""
-    try:
-        json_string = json.dumps(data, indent=2)
-        return json_string
-    except Exception as e:
-        st.error(f"Failed to export data: {str(e)}")
-        return None
-
-def import_data_from_file(uploaded_file):
-    """Import data from uploaded JSON file"""
-    try:
-        content = uploaded_file.read().decode('utf-8')
-        imported_data = json.loads(content)
-
-        # Basic validation - check for required keys
-        required_keys = ["daily_checklists", "checklist_templates"]
-        if not all(key in imported_data for key in required_keys):
-            st.error("Invalid backup file: missing required data fields")
-            return None
-
-        return imported_data
-    except json.JSONDecodeError:
-        st.error("Invalid JSON file")
-        return None
-    except Exception as e:
-        st.error(f"Failed to import data: {str(e)}")
-        return None
 
 # OLD JSON CODE - DISABLED (using database now)
 # data = load_data()
 # check_and_create_daily_backup(data)
 
-# ============================================================================
-# DATABASE ANALYTICS FUNCTIONS
-# ============================================================================
-
-def get_day_points_db(session: Session, date: datetime.date, separate: bool = False) -> Union[float, Tuple[float, float]]:
-    """Calculate points for a day from database, optionally separating positive and negative"""
-    tasks = session.query(DailyTask).filter_by(date=date, completed=True).all()
-
-    positive = 0.0
-    negative = 0.0
-
-    for task in tasks:
-        points = task.points
-        if task.trackable:
-            points = points * task.quantity
-
-        if points > 0:
-            positive += points
-        else:
-            negative += points
-
-    if separate:
-        return (positive, negative)
-    return positive + negative
-
-def get_task_streak_db(session: Session, task_name: str, end_date: datetime.date, days_back: int = 90) -> Tuple[int, int]:
-    """Calculate current streak and longest streak for a specific task from database"""
-    start_date = end_date - timedelta(days=days_back)
-
-    # Get all tasks with this name in the date range
-    tasks = session.query(DailyTask).filter(
-        DailyTask.task_name == task_name,
-        DailyTask.date >= start_date,
-        DailyTask.date <= end_date
-    ).order_by(DailyTask.date.desc()).all()
-
-    # Create a lookup dict by date
-    task_by_date = {task.date: task for task in tasks}
-
-    current_streak = 0
-    longest_streak = 0
-    temp_streak = 0
-
-    # Calculate current streak (from end_date backwards)
-    for i in range(days_back):
-        check_date = end_date - timedelta(days=i)
-        task = task_by_date.get(check_date)
-
-        if task:
-            if task.completed:
-                if i == current_streak:  # Consecutive from end
-                    current_streak += 1
-                temp_streak += 1
-                if temp_streak > longest_streak:
-                    longest_streak = temp_streak
-            else:
-                temp_streak = 0
-                if i < current_streak:  # Break in current streak
-                    break
-        else:
-            # No task on this day - doesn't break streak if task wasn't scheduled
-            pass
-
-    return current_streak, longest_streak
-
-def get_positive_day_streak_db(session: Session, end_date: datetime.date, days_back: int = 90) -> int:
-    """Calculate current streak of positive net point days from database"""
-    current_streak = 0
-
-    for i in range(days_back):
-        check_date = end_date - timedelta(days=i)
-        net_points = get_day_points_db(session, check_date)
-
-        # Check if there are any tasks for this day
-        has_tasks = session.query(DailyTask).filter_by(date=check_date).count() > 0
-
-        if net_points > 0:
-            current_streak += 1
-        elif has_tasks:
-            # Day exists with tasks but wasn't positive - break streak
-            break
-
-    return current_streak
-
-def get_task_consistency_db(session: Session, task_name: str, end_date: datetime.date, days_back: int = 30) -> float:
-    """Calculate consistency percentage for a task over a period from database"""
-    start_date = end_date - timedelta(days=days_back)
-
-    # Get all instances of this task in the period
-    tasks = session.query(DailyTask).filter(
-        DailyTask.task_name == task_name,
-        DailyTask.date >= start_date,
-        DailyTask.date <= end_date
-    ).all()
-
-    if not tasks:
-        return 0.0
-
-    days_with_task = len(tasks)
-    days_completed = sum(1 for task in tasks if task.completed)
-
-    return (days_completed / days_with_task) * 100 if days_with_task > 0 else 0.0
-
-def get_all_unique_tasks_db(session: Session, days_back: int = 30) -> List[str]:
-    """Get all unique task names from recent history from database"""
-    end_date = datetime.now(ZoneInfo("America/New_York")).date()
-    start_date = end_date - timedelta(days=days_back)
-
-    result = session.query(DailyTask.task_name).filter(
-        DailyTask.date >= start_date,
-        DailyTask.date <= end_date
-    ).distinct().all()
-
-    return sorted([r[0] for r in result])
-
-def prepare_avatar_analysis_data(session: Session, start_date: datetime.date, end_date: datetime.date) -> Dict[str, Any]:
-    """Format tracking data for LLM avatar alignment analysis"""
-    # Get all tasks in the period
-    tasks = get_tasks_in_range(session, start_date, end_date)
-    metrics = get_metrics_in_range(session, start_date, end_date)
-
-    # Calculate task patterns
-    total_tasks = len(tasks)
-    completed_tasks = sum(1 for t in tasks if t.completed)
-    completion_rate = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0
-
-    # Task name breakdown - analyze individual task patterns
-    task_breakdown = {}
-    for task in tasks:
-        task_name = task.task_name
-        if task_name not in task_breakdown:
-            task_breakdown[task_name] = {
-                "total_instances": 0,
-                "completed_instances": 0,
-                "total_points": 0.0
-            }
-
-        task_breakdown[task_name]["total_instances"] += 1
-        if task.completed:
-            task_breakdown[task_name]["completed_instances"] += 1
-            task_breakdown[task_name]["total_points"] += task.points * task.quantity
-
-    # Get top tasks by points and consistency
-    top_tasks_by_points = sorted(
-        [(name, data["total_points"]) for name, data in task_breakdown.items()],
-        key=lambda x: x[1],
-        reverse=True
-    )[:10]
-
-    top_tasks_by_consistency = sorted(
-        [(name, data["completed_instances"] / data["total_instances"] * 100)
-         for name, data in task_breakdown.items() if data["total_instances"] > 0],
-        key=lambda x: x[1],
-        reverse=True
-    )[:10]
-
-    # Streaks
-    current_positive_days = get_positive_day_streak_db(session, end_date)
-
-    # Get top habits (tasks with highest completion rate)
-    unique_tasks = get_all_unique_tasks_db(session, (end_date - start_date).days)
-    task_consistencies = [
-        (task_name, get_task_consistency_db(session, task_name, end_date, (end_date - start_date).days))
-        for task_name in unique_tasks
-    ]
-    task_consistencies.sort(key=lambda x: x[1], reverse=True)
-    top_habits = [name for name, _ in task_consistencies[:5] if _ > 50]
-
-    # Mood and energy
-    mood_values = [m.mood for m in metrics if m.mood is not None]
-    energy_values = [m.energy for m in metrics if m.energy is not None]
-
-    avg_mood = sum(mood_values) / len(mood_values) if mood_values else None
-    avg_energy = sum(energy_values) / len(energy_values) if energy_values else None
-
-    # Negative habits
-    negative_tasks = [t for t in tasks if t.completed and t.points < 0]
-    negative_point_sources = {}
-    for task in negative_tasks:
-        points = task.points * task.quantity
-        if task.task_name in negative_point_sources:
-            negative_point_sources[task.task_name] += points
-        else:
-            negative_point_sources[task.task_name] = points
-
-    negative_list = [f"{name}: {pts:+.1f}pts" for name, pts in sorted(negative_point_sources.items(), key=lambda x: x[1])]
-
-    # Days with negative net points
-    days_with_negative_net = 0
-    current_day = start_date
-    while current_day <= end_date:
-        if get_day_points_db(session, current_day) < 0:
-            days_with_negative_net += 1
-        current_day += timedelta(days=1)
-
-    return {
-        "task_patterns": {
-            "total_tasks": total_tasks,
-            "completion_rate": completion_rate,
-            "top_tasks_by_points": top_tasks_by_points,
-            "top_tasks_by_consistency": top_tasks_by_consistency,
-            "task_breakdown": task_breakdown,
-            "streaks": {
-                "current_positive_days": current_positive_days,
-                "top_habits": top_habits
-            }
-        },
-        "wellbeing": {
-            "avg_mood": avg_mood,
-            "avg_energy": avg_energy
-        },
-        "challenges": {
-            "negative_point_sources": negative_list,
-            "days_with_negative_net": days_with_negative_net
-        }
-    }
-
-# AVATAR ALIGNMENT PROMPT TEMPLATE (for future Claude API integration)
-#
-def generate_avatar_prompt(avatar_description: str, analysis_data: dict) -> str:
-    """Generate prompt for Claude API to analyze avatar alignment"""
-    return f"""You are analyzing whether a user's behavior aligns with their ideal self.
-
-Avatar (Ideal Self):
-{avatar_description}
-
-Behavior Data (Last 30 days):
-{json.dumps(analysis_data, indent=2)}
-
-Analyze the behavior data and determine how well it aligns with the avatar description. Return ONLY valid JSON with this exact structure (no markdown, no code blocks):
-{{
-  "alignment_score": <number 0-100>,
-  "summary": "<2-3 sentences on overall alignment>",
-  "recommendations": ["<specific action 1>", "<specific action 2>", "<specific action 3>"],
-  "trend": "<improving|declining|stable>",
-  "key_strengths": ["<strength 1>", "<strength 2>"],
-  "areas_for_growth": ["<area 1>", "<area 2>"]
-}}"""
-
-# DISABLED - API-based analysis (uncomment and add anthropic import if you want to enable)
-# def analyze_avatar_alignment(session: Session, avatar_id: int, start_date: datetime.date, end_date: datetime.date) -> AvatarAlignment:
-#     """Call Claude API to analyze avatar alignment"""
-#     try:
-#         # Get avatar and prepare data
-#         avatar = session.query(Avatar).filter_by(id=avatar_id).first()
-#         if not avatar:
-#             raise ValueError(f"Avatar with id {avatar_id} not found")
-#
-#         analysis_data = prepare_avatar_analysis_data(session, start_date, end_date)
-#         prompt = generate_avatar_prompt(avatar.description, analysis_data)
-#
-#         # Call Anthropic API
-#         import anthropic
-#         client = anthropic.Anthropic(api_key=st.secrets["anthropic"]["api_key"])
-#         response = client.messages.create(
-#             model="claude-3-5-sonnet-20241022",
-#             max_tokens=2048,
-#             messages=[{"role": "user", "content": prompt}]
-#         )
-#
-#         # Parse response
-#         response_text = response.content[0].text.strip()
-#
-#         # Remove markdown code blocks if present
-#         if response_text.startswith("```"):
-#             response_text = response_text.split("```")[1]
-#             if response_text.startswith("json"):
-#                 response_text = response_text[4:]
-#             response_text = response_text.strip()
-#
-#         result = json.loads(response_text)
-#
-#         # Save alignment to database
-#         alignment = AvatarAlignment(
-#             avatar_id=avatar_id,
-#             analysis_date=datetime.now().date(),
-#             start_date=start_date,
-#             end_date=end_date,
-#             alignment_score=result['alignment_score'],
-#             alignment_summary=result['summary'],
-#             recommendations=json.dumps(result['recommendations']),
-#             trend=result.get('trend', 'stable'),
-#             llm_model='claude-3-5-sonnet-20241022',
-#             llm_prompt_version='v1.0'
-#         )
-#         session.add(alignment)
-#         session.commit()
-#
-#         return alignment
-#
-#     except Exception as e:
-#         st.error(f"Error analyzing avatar alignment: {str(e)}")
-#         raise
-
-def get_alignment_history(session: Session, avatar_id: int, limit: int = 10) -> List[AvatarAlignment]:
-    """Get recent alignment analysis history for an avatar"""
-    return session.query(AvatarAlignment)\
-        .filter_by(avatar_id=avatar_id)\
-        .order_by(AvatarAlignment.analysis_date.desc())\
-        .limit(limit)\
-        .all()
 
 # ============================================================================
 # LEGACY JSON FUNCTIONS (for compatibility - mostly replaced by database operations)
@@ -932,7 +568,7 @@ with date_col4:
 st.markdown("###")  # Spacing
 
 # Get today's stats from database
-positive_pts, negative_pts = get_day_points_db(db_session, today, separate=True)
+positive_pts, negative_pts = get_day_points(db_session, today, separate=True)
 net_pts = positive_pts + negative_pts
 
 # Get today's tasks for completion rate
@@ -942,7 +578,7 @@ if today_tasks:
     completed_count = sum(1 for t in today_tasks if t.completed)
     completion_rate = (completed_count / len(today_tasks)) * 100
 
-positive_streak = get_positive_day_streak_db(db_session, today_actual)
+positive_streak = get_positive_day_streak(db_session, today_actual)
 
 # Dashboard metrics in a clean row
 dash_col1, dash_col2, dash_col3, dash_col4, dash_col5, dash_col6 = st.columns(6)
@@ -1137,7 +773,7 @@ with tab1:
     for i in range(30):
         check_date = today_actual - timedelta(days=29-i)
 
-        pos, neg = get_day_points_db(db_session, check_date, separate=True)
+        pos, neg = get_day_points(db_session, check_date, separate=True)
 
         # Get mood and energy if available
         metric = get_daily_metric(db_session, check_date)
@@ -1295,7 +931,7 @@ with tab2:
     st.caption("Track your consistency and build strong habits")
 
     # Overall positive day streak
-    positive_streak = get_positive_day_streak_db(db_session, today_actual)
+    positive_streak = get_positive_day_streak(db_session, today_actual)
 
     st.subheader("📊 Overall Performance")
     col1, col2, col3 = st.columns(3)
@@ -1309,7 +945,7 @@ with tab2:
         temp_streak = 0
         for i in range(180):  # Check last 6 months
             check_date = today_actual - timedelta(days=i)
-            day_pts = get_day_points_db(db_session, check_date)
+            day_pts = get_day_points(db_session, check_date)
             tasks_exist = len(get_daily_tasks(db_session, check_date)) > 0
 
             if day_pts > 0:
@@ -1329,7 +965,7 @@ with tab2:
             tasks = get_daily_tasks(db_session, check_date)
             if tasks:
                 logged_days += 1
-                if get_day_points_db(db_session, check_date) > 0:
+                if get_day_points(db_session, check_date) > 0:
                     positive_days += 1
         consistency = (positive_days / logged_days * 100) if logged_days > 0 else 0
         st.metric("📈 30-Day Win Rate", f"{consistency:.0f}%")
@@ -1339,14 +975,14 @@ with tab2:
     # Individual task streaks and consistency
     st.subheader("📋 Task Performance (Last 30 Days)")
 
-    unique_tasks = get_all_unique_tasks_db(db_session, 30)
+    unique_tasks = get_all_unique_tasks(db_session, 30)
 
     if unique_tasks:
         # Calculate stats for each task
         task_stats = []
         for task_name in unique_tasks:
-            current_streak, longest_streak = get_task_streak_db(db_session, task_name, today_actual, 90)
-            consistency = get_task_consistency_db(db_session, task_name, today_actual, 30)
+            current_streak, longest_streak = get_task_streak(db_session, task_name, today_actual, 90)
+            consistency = get_task_consistency(db_session, task_name, today_actual, 30)
 
             task_stats.append({
                 "Task": task_name,
@@ -1440,20 +1076,20 @@ with tab3:
                         for i in range(7):
                             check_date = week_start + timedelta(days=i)
                             if check_date <= today_actual:
-                                current += get_day_points_db(db_session, check_date)
+                                current += get_day_points(db_session, check_date)
                     elif goal_type == "Monthly":
                         month_start = today_actual.replace(day=1)
                         current = 0
                         check_date = month_start
                         while check_date <= today_actual:
-                            current += get_day_points_db(db_session, check_date)
+                            current += get_day_points(db_session, check_date)
                             check_date += timedelta(days=1)
                     else:  # Yearly
                         year_start = today_actual.replace(month=1, day=1)
                         current = 0
                         check_date = year_start
                         while check_date <= today_actual:
-                            current += get_day_points_db(db_session, check_date)
+                            current += get_day_points(db_session, check_date)
                             check_date += timedelta(days=1)
 
                     progress_pct = (current / target * 100) if target > 0 else 0
@@ -1528,7 +1164,7 @@ with tab3:
             tasks = get_daily_tasks(db_session, check_date)
             if tasks:
                 week_logged_days += 1
-                day_points = get_day_points_db(db_session, check_date)
+                day_points = get_day_points(db_session, check_date)
                 week_points += day_points
                 if day_points > 0:
                     week_positive_days += 1
@@ -1564,7 +1200,7 @@ with tab3:
             tasks = get_daily_tasks(db_session, check_date)
             if tasks:
                 st.write(f"**{check_date.strftime('%A, %B %d')}**")
-                pos, neg = get_day_points_db(db_session, check_date, separate=True)
+                pos, neg = get_day_points(db_session, check_date, separate=True)
 
                 col1, col2, col3 = st.columns(3)
                 with col1:
