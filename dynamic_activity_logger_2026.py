@@ -3,9 +3,20 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from typing import Optional, List, Dict, Any, Tuple, Union
 import json
 from pathlib import Path
 import shutil
+
+# Import from local modules
+from sqlalchemy.orm import Session
+from models import (
+    Base, User, TaskTemplate, DailyTask, DailyMetric,
+    Goal, Avatar, AvatarAlignment, StreakCache, SystemMetadata
+)
+from config.settings import DATABASE_URL, DB_FILE, DATA_FILE, BACKUP_DIR, DEFAULT_TIMEZONE
+from config.styles import MOBILE_CSS
+from database.connection import init_database, get_db_session, migrate_remove_category_column
 
 # Page config - must be first Streamlit command
 st.set_page_config(
@@ -20,63 +31,8 @@ st.set_page_config(
     }
 )
 
-# Mobile optimization CSS
-st.markdown("""
-<style>
-    /* Hide Streamlit branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    /* Keep header visible for sidebar toggle button */
-    
-    /* PWA meta tags */
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Activity Tracker">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    
-    /* Mobile-friendly touch targets */
-    .stCheckbox {
-        font-size: 18px !important;
-        padding: 12px 0 !important;
-    }
-    
-    .stCheckbox > label {
-        padding: 10px !important;
-    }
-    
-    /* Bigger buttons */
-    .stButton button {
-        height: 48px !important;
-        font-size: 16px !important;
-        border-radius: 8px !important;
-    }
-    
-    /* Better spacing on mobile */
-    @media (max-width: 768px) {
-        .block-container {
-            padding: 1rem 1rem 10rem 1rem !important;
-        }
-        
-        /* Stack columns on mobile */
-        [data-testid="column"] {
-            width: 100% !important;
-            flex: 1 1 100% !important;
-        }
-    }
-    
-    /* Number inputs more touch-friendly */
-    .stNumberInput input {
-        height: 44px !important;
-        font-size: 18px !important;
-    }
-    
-    /* Better form styling */
-    .stTextInput input, .stSelectbox select {
-        height: 44px !important;
-        font-size: 16px !important;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Apply mobile optimization CSS
+st.markdown(MOBILE_CSS, unsafe_allow_html=True)
 
 # Optional: Simple password protection
 # Uncomment and set password in Streamlit Cloud secrets
@@ -129,170 +85,8 @@ if not check_password():
     st.stop()
 
 # ============================================================================
-# DATABASE MODELS (SQLAlchemy)
+# LEGACY JSON DATA FUNCTIONS (for migration and backup)
 # ============================================================================
-
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Date, DateTime, Text, ForeignKey, func, Index, CheckConstraint
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship, Session
-from typing import Optional, List, Dict, Any, Tuple, Union
-
-Base = declarative_base()
-
-class User(Base):
-    """User configuration and totals"""
-    __tablename__ = 'users'
-
-    id = Column(Integer, primary_key=True)
-    total_points = Column(Float, default=0.0)
-    timezone = Column(String, default='America/New_York')
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-class TaskTemplate(Base):
-    """Task templates for quick daily task creation"""
-    __tablename__ = 'task_templates'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    template_name = Column(String, nullable=False)
-    task_name = Column(String, nullable=False)
-    points = Column(Float, nullable=False)
-    trackable = Column(Boolean, default=False)
-    unit = Column(String, nullable=True)  # e.g., 'hours', 'reps', 'times'
-    sort_order = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    __table_args__ = (
-        Index('idx_task_templates_template', 'template_name'),
-    )
-
-class DailyTask(Base):
-    """Individual task instances for specific dates"""
-    __tablename__ = 'daily_tasks'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    date = Column(Date, nullable=False)
-    task_name = Column(String, nullable=False)
-    points = Column(Float, nullable=False)
-    trackable = Column(Boolean, default=False)
-    unit = Column(String, nullable=True)
-    completed = Column(Boolean, default=False)
-    quantity = Column(Float, default=1.0)  # multiplier for trackable tasks
-    completed_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    __table_args__ = (
-        Index('idx_daily_tasks_date', 'date', postgresql_using='btree'),
-        Index('idx_daily_tasks_completed', 'completed'),
-        Index('idx_daily_tasks_date_completed', 'date', 'completed'),  # Composite for streak queries
-    )
-
-class DailyMetric(Base):
-    """Daily mood and energy tracking"""
-    __tablename__ = 'daily_metrics'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    date = Column(Date, unique=True, nullable=False)
-    mood = Column(Integer, nullable=True)
-    energy = Column(Integer, nullable=True)
-    notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    __table_args__ = (
-        CheckConstraint('mood >= 1 AND mood <= 10'),
-        CheckConstraint('energy >= 1 AND energy <= 10'),
-        Index('idx_daily_metrics_date', 'date', postgresql_using='btree'),
-    )
-
-class Goal(Base):
-    """User goals (weekly, monthly, yearly)"""
-    __tablename__ = 'goals'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String, nullable=False)
-    goal_type = Column(String, nullable=False)  # 'weekly', 'monthly', 'yearly'
-    target_points = Column(Float, nullable=False)
-    description = Column(Text, nullable=True)
-    created_date = Column(Date, nullable=False)
-    completed = Column(Boolean, default=False)
-    completed_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    __table_args__ = (
-        CheckConstraint(goal_type.in_(['weekly', 'monthly', 'yearly'])),
-        Index('idx_goals_type', 'goal_type'),
-        Index('idx_goals_completed', 'completed'),
-    )
-
-class Avatar(Base):
-    """User's ideal self definition for LLM alignment analysis"""
-    __tablename__ = 'avatars'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String, nullable=False, default='My Ideal Self')
-    description = Column(Text, nullable=False)
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    alignments = relationship('AvatarAlignment', back_populates='avatar', cascade='all, delete-orphan')
-
-class AvatarAlignment(Base):
-    """LLM analysis results of user behavior vs avatar"""
-    __tablename__ = 'avatar_alignments'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    avatar_id = Column(Integer, ForeignKey('avatars.id', ondelete='CASCADE'), nullable=False)
-    analysis_date = Column(Date, nullable=False)
-    start_date = Column(Date, nullable=False)  # beginning of analyzed period
-    end_date = Column(Date, nullable=False)    # end of analyzed period
-    alignment_score = Column(Float, nullable=True)  # 0-100 score from LLM
-    alignment_summary = Column(Text, nullable=True)  # LLM's summary
-    recommendations = Column(Text, nullable=True)  # JSON array of recommendations
-    trend = Column(String, nullable=True)  # 'improving', 'declining', 'stable'
-    llm_model = Column(String, nullable=True)  # e.g., 'claude-3-sonnet'
-    llm_prompt_version = Column(String, nullable=True)  # track prompt changes
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    avatar = relationship('Avatar', back_populates='alignments')
-
-    __table_args__ = (
-        Index('idx_avatar_alignments_date', 'analysis_date', postgresql_using='btree'),
-        Index('idx_avatar_alignments_avatar', 'avatar_id'),
-    )
-
-class StreakCache(Base):
-    """Cached streak calculations for performance"""
-    __tablename__ = 'streak_cache'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    task_name = Column(String, unique=True, nullable=False)
-    current_streak = Column(Integer, default=0)
-    longest_streak = Column(Integer, default=0)
-    last_calculated_date = Column(Date, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    __table_args__ = (
-        Index('idx_streak_cache_task', 'task_name'),
-    )
-
-class SystemMetadata(Base):
-    """System metadata and configuration"""
-    __tablename__ = 'system_metadata'
-
-    key = Column(String, primary_key=True)
-    value = Column(Text, nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-# Database configuration
-DB_FILE = Path("lifetracker.db")
-DATABASE_URL = f"sqlite:///{DB_FILE}"
-
-# Data storage path (legacy JSON for migration)
-DATA_FILE = Path("dynamic_activity_log_2026.json")
-BACKUP_DIR = Path("backups")
 
 # Initialize data structure
 def load_data():
@@ -460,179 +254,6 @@ def import_data_from_file(uploaded_file):
 # OLD JSON CODE - DISABLED (using database now)
 # data = load_data()
 # check_and_create_daily_backup(data)
-
-# ============================================================================
-# DATABASE HELPER FUNCTIONS
-# ============================================================================
-
-# Global database engine and session factory
-_engine = None
-_SessionLocal = None
-
-def init_database():
-    """Initialize database engine and create all tables"""
-    global _engine, _SessionLocal
-
-    if _engine is None:
-        # SQLite connection args to prevent stale connections and data loss
-        connect_args = {
-            "check_same_thread": False,  # Required for Streamlit's threading model
-            "timeout": 30  # Increase timeout to 30 seconds
-        }
-        _engine = create_engine(
-            DATABASE_URL,
-            echo=False,
-            connect_args=connect_args,
-            pool_pre_ping=True,  # Verify connections are alive before using
-            pool_recycle=3600  # Recycle connections after 1 hour
-        )
-        _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
-        Base.metadata.create_all(bind=_engine)
-
-        # Initialize user if not exists
-        session = _SessionLocal()
-        try:
-            user = session.query(User).first()
-            if not user:
-                user = User(total_points=0.0)
-                session.add(user)
-                session.commit()
-        finally:
-            session.close()
-
-        # Run category removal migration if needed
-        # Note: This only runs once when tables are first created
-        # The migration function itself checks if it's already been run
-
-    return _engine
-
-def get_db_session() -> Session:
-    """Get a new database session"""
-    if _SessionLocal is None:
-        init_database()
-    return _SessionLocal()
-
-def migrate_remove_category_column() -> Tuple[bool, str]:
-    """One-time migration to remove category column from database schema."""
-    try:
-        # Check if already completed
-        session = get_db_session()
-        metadata = session.query(SystemMetadata).filter_by(
-            key='migration_remove_category'
-        ).first()
-        if metadata and metadata.value == 'completed':
-            session.close()
-            return True, "Migration already completed"
-
-        # Create backup
-        timestamp = datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d_%H%M%S")
-        backup_file = DB_FILE.parent / f"backup_before_category_removal_{timestamp}.db"
-
-        # Check if database file exists
-        if DB_FILE.exists():
-            shutil.copy2(DB_FILE, backup_file)
-        else:
-            # No database yet, nothing to migrate
-            session.close()
-            return True, "No database to migrate"
-
-        # Close all connections
-        session.close()
-        global _engine, _SessionLocal
-        if _engine:
-            _engine.dispose()
-            _engine = None
-            _SessionLocal = None
-
-        # Execute SQLite migration
-        import sqlite3
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-
-        # Check if migration is needed (category column exists)
-        cursor.execute("PRAGMA table_info(daily_tasks);")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'category' not in columns:
-            # Already migrated
-            conn.close()
-            init_database()
-            return True, "Migration not needed - category column already removed"
-
-        # Drop category index
-        cursor.execute("DROP INDEX IF EXISTS idx_daily_tasks_category;")
-
-        # Recreate daily_tasks without category
-        cursor.execute("""
-            CREATE TABLE daily_tasks_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date DATE NOT NULL,
-                task_name VARCHAR NOT NULL,
-                points FLOAT NOT NULL,
-                trackable BOOLEAN DEFAULT 0,
-                unit VARCHAR,
-                completed BOOLEAN DEFAULT 0,
-                quantity FLOAT DEFAULT 1.0,
-                completed_at DATETIME,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-
-        cursor.execute("""
-            INSERT INTO daily_tasks_new
-            SELECT id, date, task_name, points, trackable, unit,
-                   completed, quantity, completed_at, created_at
-            FROM daily_tasks;
-        """)
-
-        cursor.execute("DROP TABLE daily_tasks;")
-        cursor.execute("ALTER TABLE daily_tasks_new RENAME TO daily_tasks;")
-
-        # Recreate indexes
-        cursor.execute("CREATE INDEX idx_daily_tasks_date ON daily_tasks (date);")
-        cursor.execute("CREATE INDEX idx_daily_tasks_completed ON daily_tasks (completed);")
-        cursor.execute("CREATE INDEX idx_daily_tasks_date_completed ON daily_tasks (date, completed);")
-
-        # Recreate task_templates without category
-        cursor.execute("""
-            CREATE TABLE task_templates_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                template_name VARCHAR NOT NULL,
-                task_name VARCHAR NOT NULL,
-                points FLOAT NOT NULL,
-                trackable BOOLEAN DEFAULT 0,
-                unit VARCHAR,
-                sort_order INTEGER DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-
-        cursor.execute("""
-            INSERT INTO task_templates_new
-            SELECT id, template_name, task_name, points, trackable,
-                   unit, sort_order, created_at
-            FROM task_templates;
-        """)
-
-        cursor.execute("DROP TABLE task_templates;")
-        cursor.execute("ALTER TABLE task_templates_new RENAME TO task_templates;")
-        cursor.execute("CREATE INDEX idx_task_templates_template ON task_templates (template_name);")
-
-        conn.commit()
-        conn.close()
-
-        # Reinitialize database
-        init_database()
-
-        # Mark complete
-        session = get_db_session()
-        session.add(SystemMetadata(key='migration_remove_category', value='completed'))
-        session.commit()
-        session.close()
-
-        return True, f"Migration successful. Backup: {backup_file.name}"
-
-    except Exception as e:
-        return False, f"Migration failed: {str(e)}"
 
 # ============================================================================
 # CRUD Operations for Daily Tasks
