@@ -156,7 +156,6 @@ class TaskTemplate(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     template_name = Column(String, nullable=False)
     task_name = Column(String, nullable=False)
-    category = Column(String, nullable=False)
     points = Column(Float, nullable=False)
     trackable = Column(Boolean, default=False)
     unit = Column(String, nullable=True)  # e.g., 'hours', 'reps', 'times'
@@ -164,7 +163,6 @@ class TaskTemplate(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        CheckConstraint(category.in_(['Spiritual', 'Social', 'Physical', 'Intellectual', 'Other'])),
         Index('idx_task_templates_template', 'template_name'),
     )
 
@@ -175,7 +173,6 @@ class DailyTask(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     date = Column(Date, nullable=False)
     task_name = Column(String, nullable=False)
-    category = Column(String, nullable=False)
     points = Column(Float, nullable=False)
     trackable = Column(Boolean, default=False)
     unit = Column(String, nullable=True)
@@ -185,9 +182,7 @@ class DailyTask(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        CheckConstraint(category.in_(['Spiritual', 'Social', 'Physical', 'Intellectual', 'Other'])),
         Index('idx_daily_tasks_date', 'date', postgresql_using='btree'),
-        Index('idx_daily_tasks_category', 'category'),
         Index('idx_daily_tasks_completed', 'completed'),
         Index('idx_daily_tasks_date_completed', 'date', 'completed'),  # Composite for streak queries
     )
@@ -306,26 +301,26 @@ def load_data():
         "daily_checklists": {},  # {date: {tasks: [], completed: [], quantities: {task_name: count}}}
         "checklist_templates": {
             "Morning Routine": [
-                {"name": "Scripture Study (15 min)", "category": "Spiritual", "points": 15},
-                {"name": "Personal Prayer (morning)", "category": "Spiritual", "points": 5},
-                {"name": "Brush Teeth (morning)", "category": "Physical", "points": 1},
-                {"name": "Shower", "category": "Physical", "points": 3},
-                {"name": "Make Bed", "category": "Other", "points": 5},
+                {"name": "Scripture Study (15 min)", "points": 15},
+                {"name": "Personal Prayer (morning)", "points": 5},
+                {"name": "Brush Teeth (morning)", "points": 1},
+                {"name": "Shower", "points": 3},
+                {"name": "Make Bed", "points": 5},
             ],
             "Evening Routine": [
-                {"name": "Personal Prayer (evening)", "category": "Spiritual", "points": 5},
-                {"name": "Reading (15 min)", "category": "Intellectual", "points": 10},
-                {"name": "Brush Teeth (evening)", "category": "Physical", "points": 2},
+                {"name": "Personal Prayer (evening)", "points": 5},
+                {"name": "Reading (15 min)", "points": 10},
+                {"name": "Brush Teeth (evening)", "points": 2},
             ],
             "Personal Development": [
-                {"name": "Job Application", "category": "Intellectual", "points": 1, "trackable": True, "unit": "applications"},
-                {"name": "Independent Project (30 min)", "category": "Intellectual", "points": 10, "trackable": False},
-                {"name": "Piano", "category": "Intellectual", "points": 10, "trackable": False},
+                {"name": "Job Application", "points": 1, "trackable": True, "unit": "applications"},
+                {"name": "Independent Project (30 min)", "points": 10, "trackable": False},
+                {"name": "Piano", "points": 10, "trackable": False},
             ],
             "Negative Habits": [
-                {"name": "Phone Screen Time (per hour)", "category": "Spiritual", "points": -2.5, "trackable": True, "unit": "hours"},
-                {"name": "Phone Screen Time After Bed", "category": "Spiritual", "points": -5, "trackable": True, "unit": "hours"},
-                {"name": "18+ Content", "category": "Spiritual", "points": -10, "trackable": True, "unit": "events"},
+                {"name": "Phone Screen Time (per hour)", "points": -2.5, "trackable": True, "unit": "hours"},
+                {"name": "Phone Screen Time After Bed", "points": -5, "trackable": True, "unit": "hours"},
+                {"name": "18+ Content", "points": -10, "trackable": True, "unit": "events"},
             ]
         },
         "time_logs": {},
@@ -505,6 +500,10 @@ def init_database():
         finally:
             session.close()
 
+        # Run category removal migration if needed
+        # Note: This only runs once when tables are first created
+        # The migration function itself checks if it's already been run
+
     return _engine
 
 def get_db_session() -> Session:
@@ -513,11 +512,133 @@ def get_db_session() -> Session:
         init_database()
     return _SessionLocal()
 
+def migrate_remove_category_column() -> Tuple[bool, str]:
+    """One-time migration to remove category column from database schema."""
+    try:
+        # Check if already completed
+        session = get_db_session()
+        metadata = session.query(SystemMetadata).filter_by(
+            key='migration_remove_category'
+        ).first()
+        if metadata and metadata.value == 'completed':
+            session.close()
+            return True, "Migration already completed"
+
+        # Create backup
+        timestamp = datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d_%H%M%S")
+        backup_file = DB_FILE.parent / f"backup_before_category_removal_{timestamp}.db"
+
+        # Check if database file exists
+        if DB_FILE.exists():
+            shutil.copy2(DB_FILE, backup_file)
+        else:
+            # No database yet, nothing to migrate
+            session.close()
+            return True, "No database to migrate"
+
+        # Close all connections
+        session.close()
+        global _engine, _SessionLocal
+        if _engine:
+            _engine.dispose()
+            _engine = None
+            _SessionLocal = None
+
+        # Execute SQLite migration
+        import sqlite3
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+
+        # Check if migration is needed (category column exists)
+        cursor.execute("PRAGMA table_info(daily_tasks);")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'category' not in columns:
+            # Already migrated
+            conn.close()
+            init_database()
+            return True, "Migration not needed - category column already removed"
+
+        # Drop category index
+        cursor.execute("DROP INDEX IF EXISTS idx_daily_tasks_category;")
+
+        # Recreate daily_tasks without category
+        cursor.execute("""
+            CREATE TABLE daily_tasks_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date DATE NOT NULL,
+                task_name VARCHAR NOT NULL,
+                points FLOAT NOT NULL,
+                trackable BOOLEAN DEFAULT 0,
+                unit VARCHAR,
+                completed BOOLEAN DEFAULT 0,
+                quantity FLOAT DEFAULT 1.0,
+                completed_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        cursor.execute("""
+            INSERT INTO daily_tasks_new
+            SELECT id, date, task_name, points, trackable, unit,
+                   completed, quantity, completed_at, created_at
+            FROM daily_tasks;
+        """)
+
+        cursor.execute("DROP TABLE daily_tasks;")
+        cursor.execute("ALTER TABLE daily_tasks_new RENAME TO daily_tasks;")
+
+        # Recreate indexes
+        cursor.execute("CREATE INDEX idx_daily_tasks_date ON daily_tasks (date);")
+        cursor.execute("CREATE INDEX idx_daily_tasks_completed ON daily_tasks (completed);")
+        cursor.execute("CREATE INDEX idx_daily_tasks_date_completed ON daily_tasks (date, completed);")
+
+        # Recreate task_templates without category
+        cursor.execute("""
+            CREATE TABLE task_templates_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_name VARCHAR NOT NULL,
+                task_name VARCHAR NOT NULL,
+                points FLOAT NOT NULL,
+                trackable BOOLEAN DEFAULT 0,
+                unit VARCHAR,
+                sort_order INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        cursor.execute("""
+            INSERT INTO task_templates_new
+            SELECT id, template_name, task_name, points, trackable,
+                   unit, sort_order, created_at
+            FROM task_templates;
+        """)
+
+        cursor.execute("DROP TABLE task_templates;")
+        cursor.execute("ALTER TABLE task_templates_new RENAME TO task_templates;")
+        cursor.execute("CREATE INDEX idx_task_templates_template ON task_templates (template_name);")
+
+        conn.commit()
+        conn.close()
+
+        # Reinitialize database
+        init_database()
+
+        # Mark complete
+        session = get_db_session()
+        session.add(SystemMetadata(key='migration_remove_category', value='completed'))
+        session.commit()
+        session.close()
+
+        return True, f"Migration successful. Backup: {backup_file.name}"
+
+    except Exception as e:
+        return False, f"Migration failed: {str(e)}"
+
 # ============================================================================
 # CRUD Operations for Daily Tasks
 # ============================================================================
 
-def save_daily_task(session: Session, date: datetime.date, task_name: str, category: str,
+def save_daily_task(session: Session, date: datetime.date, task_name: str,
                     points: float, trackable: bool = False, unit: str = None,
                     quantity: float = 1.0, completed: bool = False) -> DailyTask:
     """Create or update a daily task"""
@@ -525,7 +646,6 @@ def save_daily_task(session: Session, date: datetime.date, task_name: str, categ
 
     if task:
         # Update existing task
-        task.category = category
         task.points = points
         task.trackable = trackable
         task.unit = unit
@@ -538,7 +658,6 @@ def save_daily_task(session: Session, date: datetime.date, task_name: str, categ
         task = DailyTask(
             date=date,
             task_name=task_name,
-            category=category,
             points=points,
             trackable=trackable,
             unit=unit,
@@ -594,13 +713,12 @@ def get_tasks_in_range(session: Session, start_date: datetime.date, end_date: da
 # ============================================================================
 
 def save_task_template(session: Session, template_name: str, task_name: str,
-                      category: str, points: float, trackable: bool = False,
+                      points: float, trackable: bool = False,
                       unit: str = None, sort_order: int = 0) -> TaskTemplate:
     """Create a task template"""
     template = TaskTemplate(
         template_name=template_name,
         task_name=task_name,
-        category=category,
         points=points,
         trackable=trackable,
         unit=unit,
@@ -629,7 +747,6 @@ def get_all_templates(session: Session) -> Dict[str, List[Dict]]:
         templates[name] = [
             {
                 "name": t.task_name,
-                "category": t.category,
                 "points": t.points,
                 "trackable": t.trackable,
                 "unit": t.unit
@@ -776,23 +893,6 @@ def get_day_points_db(session: Session, date: datetime.date, separate: bool = Fa
         return (positive, negative)
     return positive + negative
 
-def get_category_points_db(session: Session, date: datetime.date, category: str) -> float:
-    """Get points for a specific category on a date from database"""
-    tasks = session.query(DailyTask).filter_by(
-        date=date,
-        category=category,
-        completed=True
-    ).all()
-
-    total = 0.0
-    for task in tasks:
-        points = task.points
-        if task.trackable:
-            points = points * task.quantity
-        total += points
-
-    return total
-
 def get_task_streak_db(session: Session, task_name: str, end_date: datetime.date, days_back: int = 90) -> Tuple[int, int]:
     """Calculate current streak and longest streak for a specific task from database"""
     start_date = end_date - timedelta(days=days_back)
@@ -894,18 +994,35 @@ def prepare_avatar_analysis_data(session: Session, start_date: datetime.date, en
     completed_tasks = sum(1 for t in tasks if t.completed)
     completion_rate = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0
 
-    # Category breakdown
-    categories = {}
-    for category in ['Spiritual', 'Social', 'Physical', 'Intellectual', 'Other']:
-        cat_tasks = [t for t in tasks if t.category == category]
-        cat_completed = [t for t in cat_tasks if t.completed]
-        cat_points = sum(t.points * t.quantity for t in cat_completed)
+    # Task name breakdown - analyze individual task patterns
+    task_breakdown = {}
+    for task in tasks:
+        task_name = task.task_name
+        if task_name not in task_breakdown:
+            task_breakdown[task_name] = {
+                "total_instances": 0,
+                "completed_instances": 0,
+                "total_points": 0.0
+            }
 
-        categories[category] = {
-            "completed": len(cat_completed),
-            "total": len(cat_tasks),
-            "points": cat_points
-        }
+        task_breakdown[task_name]["total_instances"] += 1
+        if task.completed:
+            task_breakdown[task_name]["completed_instances"] += 1
+            task_breakdown[task_name]["total_points"] += task.points * task.quantity
+
+    # Get top tasks by points and consistency
+    top_tasks_by_points = sorted(
+        [(name, data["total_points"]) for name, data in task_breakdown.items()],
+        key=lambda x: x[1],
+        reverse=True
+    )[:10]
+
+    top_tasks_by_consistency = sorted(
+        [(name, data["completed_instances"] / data["total_instances"] * 100)
+         for name, data in task_breakdown.items() if data["total_instances"] > 0],
+        key=lambda x: x[1],
+        reverse=True
+    )[:10]
 
     # Streaks
     current_positive_days = get_positive_day_streak_db(session, end_date)
@@ -950,7 +1067,9 @@ def prepare_avatar_analysis_data(session: Session, start_date: datetime.date, en
         "task_patterns": {
             "total_tasks": total_tasks,
             "completion_rate": completion_rate,
-            "by_category": categories,
+            "top_tasks_by_points": top_tasks_by_points,
+            "top_tasks_by_consistency": top_tasks_by_consistency,
+            "task_breakdown": task_breakdown,
             "streaks": {
                 "current_positive_days": current_positive_days,
                 "top_habits": top_habits
@@ -1106,7 +1225,6 @@ def migrate_json_to_database() -> Tuple[bool, str]:
                         session,
                         template_name=template_name,
                         task_name=task['name'],
-                        category=task['category'],
                         points=task['points'],
                         trackable=task.get('trackable', False),
                         unit=task.get('unit'),
@@ -1130,7 +1248,6 @@ def migrate_json_to_database() -> Tuple[bool, str]:
                             session,
                             date=date_obj,
                             task_name=task['name'],
-                            category=task['category'],
                             points=task['points'],
                             trackable=task.get('trackable', False),
                             unit=task.get('unit'),
@@ -1251,7 +1368,6 @@ def export_database_to_json(session: Session) -> str:
 
         task_dict = {
             "name": task.task_name,
-            "category": task.category,
             "points": task.points,
             "trackable": task.trackable
         }
@@ -1323,26 +1439,6 @@ def get_day_points(date_str, separate=False):
 
 def get_week_start(date):
     return date - timedelta(days=date.weekday())
-
-def get_category_points(date_str, category):
-    """Get points for a specific category on a date"""
-    if date_str not in data["daily_checklists"]:
-        return 0
-
-    completed = data["daily_checklists"][date_str].get("completed", [])
-    tasks = data["daily_checklists"][date_str].get("tasks", [])
-    quantities = data["daily_checklists"][date_str].get("quantities", {})
-
-    total = 0
-    for task in tasks:
-        if task["name"] in completed and task["category"] == category:
-            points = task["points"]
-            if task.get("trackable", False):
-                quantity = quantities.get(task["name"], 1)
-                points = points * quantity
-            total += points
-
-    return total
 
 def get_task_streak(task_name, end_date, days_back=90):
     """Calculate current streak and longest streak for a specific task"""
@@ -1469,6 +1565,17 @@ elif not DB_FILE.exists():
     init_database()
     st.info("✨ Welcome to LifeTracker! Database initialized.")
 
+# Run database migration if needed (one-time category removal)
+if 'migration_run' not in st.session_state:
+    success, message = migrate_remove_category_column()
+    if not success:
+        st.error(f"❌ Database migration failed: {message}")
+        st.error("Please contact support or restore from backup.")
+        st.stop()
+    elif "Migration successful" in message:
+        st.success(f"✅ {message}")
+    st.session_state.migration_run = True
+
 # Initialize database session in session state
 if 'db_session' not in st.session_state:
     st.session_state.db_session = get_db_session()
@@ -1500,15 +1607,12 @@ with st.sidebar:
                 col1, col2 = st.columns(2)
                 with col1:
                     task_name = st.text_input("Task Name")
-                    task_category = st.selectbox("Category",
-                        ["Spiritual", "Social", "Physical", "Intellectual", "Other"])
-                with col2:
                     task_points = st.number_input("Points", min_value=-50, max_value=50, value=10)
+                with col2:
                     task_trackable = st.checkbox("Trackable (with multiplier)?", value=False)
-
-                task_unit = ""
-                if task_trackable:
-                    task_unit = st.text_input("Unit (e.g., 'hours', 'reps', 'times')", value="times")
+                    task_unit = ""
+                    if task_trackable:
+                        task_unit = st.text_input("Unit (e.g., 'hours', 'reps', 'times')", value="times")
 
                 if st.form_submit_button("Add Task"):
                     if task_name:
@@ -1516,7 +1620,6 @@ with st.sidebar:
                             db_session,
                             template_name=template_name,
                             task_name=task_name,
-                            category=task_category,
                             points=task_points,
                             trackable=task_trackable,
                             unit=task_unit if task_trackable else None
@@ -1765,11 +1868,7 @@ with st.expander("➕ Add Tasks", expanded=len(today_tasks) == 0):
         st.write("**Custom Task:**")
         with st.form("quick_add", border=False):
             quick_name = st.text_input("Task name", placeholder="e.g., Meditation")
-            quick_col1, quick_col2 = st.columns([2, 1])
-            with quick_col1:
-                quick_cat = st.selectbox("Category", ["Spiritual", "Social", "Physical", "Intellectual", "Other"])
-            with quick_col2:
-                quick_pts = st.number_input("Points", -50, 50, 10)
+            quick_pts = st.number_input("Points", -50, 50, 10)
 
             quick_trackable = st.checkbox("Trackable (with multiplier)?", value=False)
             quick_unit = ""
@@ -1782,7 +1881,6 @@ with st.expander("➕ Add Tasks", expanded=len(today_tasks) == 0):
                         db_session,
                         date=today,
                         task_name=quick_name,
-                        category=quick_cat,
                         points=quick_pts,
                         trackable=quick_trackable,
                         unit=quick_unit if quick_trackable else None,
@@ -1796,70 +1894,61 @@ st.markdown("### Tasks")
 if not today_tasks:
     st.info("No tasks yet - add some using the button above!")
 else:
-    # Group by category
-    categories = {}
+    # Show completion summary
+    completed_count = len([t for t in today_tasks if t.completed])
+    st.write(f"**Completed: {completed_count}/{len(today_tasks)}**")
+    st.write("")  # Add spacing
+
+    # Simple list view - no category grouping
     for task in today_tasks:
-        cat = task.category
-        if cat not in categories:
-            categories[cat] = []
-        categories[cat].append(task)
+        # Calculate points
+        base_points = task.points
+        if task.trackable:
+            base_points = base_points * task.quantity
+        adjusted_points = base_points
 
-    # Simple list view - better for mobile
-    for category, tasks in categories.items():
-        emoji = {"Spiritual": "✨", "Social": "👥", "Physical": "💪",
-                "Intellectual": "🧠", "Other": "🏠"}.get(category, "📌")
+        # Simplified task row
+        task_col1, task_col2, task_col3 = st.columns([4, 2, 1])
 
-        completed_count = len([t for t in tasks if t.completed])
-        with st.expander(f"{emoji} **{category}** ({completed_count}/{len(tasks)})", expanded=True):
-            for task in tasks:
-                # Calculate points
-                base_points = task.points
-                if task.trackable:
-                    base_points = base_points * task.quantity
-                adjusted_points = base_points
+        with task_col1:
+            new_completion = st.checkbox(
+                task.task_name,
+                value=task.completed,
+                key=f"task_{today_str}_{task.task_name}"
+            )
+            if new_completion != task.completed:
+                update_task_completion(db_session, today, task.task_name, new_completion)
+                st.rerun()
 
-                # Simplified task row
-                task_col1, task_col2, task_col3 = st.columns([4, 2, 1])
+        with task_col2:
+            if task.trackable:
+                new_quantity = st.number_input(
+                    task.unit if task.unit else "qty",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(task.quantity),
+                    step=0.5 if task.points < 0 else 1.0,
+                    format="%.1f",
+                    key=f"qty_{today_str}_{task.task_name}",
+                    label_visibility="collapsed"
+                )
+                if new_quantity != task.quantity:
+                    update_task_completion(db_session, today, task.task_name, task.completed, new_quantity)
+                    st.rerun()
+                st.caption(f"{task.points:+.1f} × {new_quantity:.1f}")
 
-                with task_col1:
-                    new_completion = st.checkbox(
-                        task.task_name,
-                        value=task.completed,
-                        key=f"task_{today_str}_{task.task_name}"
-                    )
-                    if new_completion != task.completed:
-                        update_task_completion(db_session, today, task.task_name, new_completion)
-                        st.rerun()
+        with task_col3:
+            color = "green" if adjusted_points > 0 else "red"
+            st.markdown(f":{color}[**{adjusted_points:+.0f}**]")
 
-                with task_col2:
-                    if task.trackable:
-                        new_quantity = st.number_input(
-                            task.unit if task.unit else "qty",
-                            min_value=0.0,
-                            max_value=100.0,
-                            value=float(task.quantity),
-                            step=0.5 if task.points < 0 else 1.0,
-                            format="%.1f",
-                            key=f"qty_{today_str}_{task.task_name}",
-                            label_visibility="collapsed"
-                        )
-                        if new_quantity != task.quantity:
-                            update_task_completion(db_session, today, task.task_name, task.completed, new_quantity)
-                            st.rerun()
-                        st.caption(f"{task.points:+.1f} × {new_quantity:.1f}")
+        # Delete button in its own small column
+        task_col4 = st.columns([19, 1])[1]
+        with task_col4:
+            if st.button("🗑️", key=f"del_{today_str}_{task.task_name}", help=f"Delete {task.task_name}"):
+                delete_daily_task(db_session, today, task.task_name)
+                st.rerun()
 
-                with task_col3:
-                    color = "green" if adjusted_points > 0 else "red"
-                    st.markdown(f":{color}[**{adjusted_points:+.0f}**]")
-
-            # Simple action row
-            st.write("")
-            action_cols = st.columns(len(tasks))
-            for idx, task in enumerate(tasks):
-                with action_cols[idx]:
-                    if st.button("🗑️", key=f"del_{today_str}_{task.task_name}_{idx}", help=f"Delete {task.task_name}"):
-                        delete_daily_task(db_session, today, task.task_name)
-                        st.rerun()
+        st.write("")  # Add spacing between tasks
 
 st.markdown("---")
 
@@ -2031,129 +2120,6 @@ with tab1:
         insights.append(f"⬇️ Lowest day: **{worst_day['Date'].strftime('%b %d')}** ({worst_day['Net']:+.1f} pts)")
 
     for insight in insights:
-        st.markdown(f"- {insight}")
-
-with tab2:
-    st.header("Category Balance")
-    st.caption("See how you're doing across different life areas")
-
-    # Calculate category stats for last 30 days
-    categories = ["Spiritual", "Social", "Physical", "Intellectual", "Other"]
-    category_data = {cat: [] for cat in categories}
-
-    for i in range(30):
-        check_date = today_actual - timedelta(days=29-i)
-
-        for category in categories:
-            points = get_category_points_db(db_session, check_date, category)
-            category_data[category].append({
-                "Date": check_date,
-                "Points": points
-            })
-
-    # Total points by category
-    st.subheader("Total Points by Category (30 Days)")
-
-    category_totals = []
-    for category in categories:
-        total = sum(d["Points"] for d in category_data[category])
-        avg = total / 30
-        category_totals.append({
-            "Category": category,
-            "Total": total,
-            "Average/Day": avg
-        })
-
-    df_totals = pd.DataFrame(category_totals)
-
-    fig = go.Figure(data=[
-        go.Bar(
-            x=df_totals['Category'],
-            y=df_totals['Total'],
-            marker_color=['#9C27B0', '#2196F3', '#4CAF50', '#FF9800', '#607D8B'],
-            text=df_totals['Total'].round(1),
-            textposition='outside'
-        )
-    ])
-
-    fig.update_layout(
-        xaxis_title='Category',
-        yaxis_title='Total Points',
-        showlegend=False
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Category breakdown table
-    st.dataframe(df_totals, use_container_width=True, hide_index=True)
-
-    # Category trends over time
-    st.subheader("Category Trends")
-
-    # Create line chart for each category
-    trend_data = []
-    for category in categories:
-        for day_data in category_data[category]:
-            trend_data.append({
-                "Date": day_data["Date"],
-                "Category": category,
-                "Points": day_data["Points"]
-            })
-
-    df_trends = pd.DataFrame(trend_data)
-
-    fig = go.Figure()
-
-    colors = {'Spiritual': '#9C27B0', 'Social': '#2196F3', 'Physical': '#4CAF50',
-              'Intellectual': '#FF9800', 'Other': '#607D8B'}
-
-    for category in categories:
-        cat_data = df_trends[df_trends['Category'] == category]
-        fig.add_trace(go.Scatter(
-            x=cat_data['Date'],
-            y=cat_data['Points'],
-            mode='lines',
-            name=category,
-            line=dict(color=colors[category], width=2)
-        ))
-
-    fig.update_layout(
-        xaxis_title='Date',
-        yaxis_title='Points',
-        hovermode='x unified'
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Balance insights
-    st.subheader("⚖️ Balance Insights")
-
-    balance_insights = []
-
-    # Find strongest and weakest categories
-    strongest = df_totals.loc[df_totals['Total'].idxmax()]
-    weakest = df_totals.loc[df_totals['Total'].idxmin()]
-
-    if strongest['Total'] > 0:
-        balance_insights.append(f"💪 **{strongest['Category']}** is your strongest area with {strongest['Total']:.1f} total points")
-
-    if weakest['Total'] < strongest['Total'] * 0.3:
-        balance_insights.append(f"⚠️ **{weakest['Category']}** needs attention - only {weakest['Total']:.1f} points vs {strongest['Total']:.1f} in {strongest['Category']}")
-
-    # Check for balance
-    std_dev = df_totals['Total'].std()
-    mean_val = df_totals['Total'].mean()
-    if mean_val > 0 and std_dev / mean_val < 0.5:
-        balance_insights.append("✅ Good balance across categories!")
-    elif mean_val > 0:
-        balance_insights.append("📊 Your focus is concentrated in a few areas - consider broadening")
-
-    # Category-specific insights
-    for _, row in df_totals.iterrows():
-        if row['Average/Day'] < 1 and row['Total'] > 0:
-            balance_insights.append(f"💡 Tip: You're averaging less than 1 point/day in **{row['Category']}**")
-
-    for insight in balance_insights:
         st.markdown(f"- {insight}")
 
 with tab2:
