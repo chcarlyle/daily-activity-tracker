@@ -479,7 +479,18 @@ def init_database():
     global _engine, _SessionLocal
 
     if _engine is None:
-        _engine = create_engine(DATABASE_URL, echo=False)
+        # SQLite connection args to prevent stale connections and data loss
+        connect_args = {
+            "check_same_thread": False,  # Required for Streamlit's threading model
+            "timeout": 30  # Increase timeout to 30 seconds
+        }
+        _engine = create_engine(
+            DATABASE_URL,
+            echo=False,
+            connect_args=connect_args,
+            pool_pre_ping=True,  # Verify connections are alive before using
+            pool_recycle=3600  # Recycle connections after 1 hour
+        )
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
         Base.metadata.create_all(bind=_engine)
 
@@ -1760,6 +1771,11 @@ with st.expander("➕ Add Tasks", expanded=len(today_tasks) == 0):
             with quick_col2:
                 quick_pts = st.number_input("Points", -50, 50, 10)
 
+            quick_trackable = st.checkbox("Trackable (with multiplier)?", value=False)
+            quick_unit = ""
+            if quick_trackable:
+                quick_unit = st.text_input("Unit (e.g., 'hours', 'reps', 'times')", value="times")
+
             if st.form_submit_button("Add Task", use_container_width=True):
                 if quick_name:
                     save_daily_task(
@@ -1768,7 +1784,8 @@ with st.expander("➕ Add Tasks", expanded=len(today_tasks) == 0):
                         task_name=quick_name,
                         category=quick_cat,
                         points=quick_pts,
-                        trackable=False,
+                        trackable=quick_trackable,
+                        unit=quick_unit if quick_trackable else None,
                         completed=False
                     )
                     st.rerun()
